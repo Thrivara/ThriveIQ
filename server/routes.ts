@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
-import { insertWorkspaceSchema, insertProjectSchema, insertTemplateSchema, insertIntegrationSchema, insertContextSchema, insertRunSchema } from "@shared/schema";
+import { insertWorkspaceSchema, insertProjectSchema, insertTemplateSchema, insertIntegrationSchema, insertContextSchema, insertRunSchema, insertSecretSchema } from "@shared/schema";
 import { z } from "zod";
 import multer from "multer";
 import { openaiService } from "./services/openai";
@@ -180,6 +180,96 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error creating integration:", error);
       res.status(500).json({ message: "Failed to create integration" });
+    }
+  });
+
+  // Secrets routes
+  app.post('/api/projects/:projectId/secrets', isAuthenticated, async (req: any, res) => {
+    try {
+      const { projectId } = req.params;
+      const userId = req.user.claims.sub;
+      
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      const role = await storage.getUserWorkspaceRole(project.workspaceId, userId);
+      if (!role || !['owner', 'admin'].includes(role)) {
+        return res.status(403).json({ message: "Insufficient permissions" });
+      }
+
+      const validatedData = insertSecretSchema.parse({ ...req.body, projectId });
+      const secret = await storage.upsertSecret(validatedData);
+      res.json({ id: secret.id, projectId: secret.projectId, provider: secret.provider });
+    } catch (error) {
+      console.error("Error creating secret:", error);
+      res.status(500).json({ message: "Failed to create secret" });
+    }
+  });
+
+  // Integration testing routes
+  app.post('/api/projects/:projectId/integrations/:integrationId/test', isAuthenticated, async (req: any, res) => {
+    try {
+      const { projectId, integrationId } = req.params;
+      const userId = req.user.claims.sub;
+      
+      const project = await storage.getProject(projectId);
+      if (!project) {
+        return res.status(404).json({ message: "Project not found" });
+      }
+
+      const role = await storage.getUserWorkspaceRole(project.workspaceId, userId);
+      if (!role) {
+        return res.status(403).json({ message: "Access denied" });
+      }
+
+      const integration = await storage.getIntegration(integrationId);
+      if (!integration || integration.projectId !== projectId) {
+        return res.status(404).json({ message: "Integration not found" });
+      }
+
+      // Test the integration based on its type
+      if (integration.type === 'azure_devops') {
+        const { azureDevOpsService } = await import('./services/azureDevOps');
+        
+        // Get credentials for testing
+        const secret = await storage.getSecret(projectId, 'azure_devops');
+        if (!secret) {
+          return res.status(400).json({ message: "Azure DevOps credentials not found" });
+        }
+        
+        const credentials = JSON.parse(secret.encryptedValue);
+        const { organization, personalAccessToken } = credentials;
+        
+        // Try to fetch projects as a connection test
+        const projects = await azureDevOpsService.getProjects(organization, personalAccessToken);
+        
+        res.json({ 
+          success: true, 
+          message: "Connection successful",
+          projects: projects.slice(0, 3) // Return first 3 projects as confirmation
+        });
+      } else if (integration.type === 'jira') {
+        const { jiraService } = await import('./services/jira');
+        
+        // Try to fetch a few work items as a connection test
+        const workItems = await jiraService.getWorkItems(integration, {});
+        
+        res.json({ 
+          success: true, 
+          message: "Connection successful",
+          workItems: workItems.slice(0, 3)
+        });
+      } else {
+        res.status(400).json({ message: `Testing not implemented for ${integration.type}` });
+      }
+    } catch (error) {
+      console.error("Error testing integration:", error);
+      res.status(500).json({ 
+        success: false,
+        message: error instanceof Error ? error.message : "Connection test failed" 
+      });
     }
   });
 
