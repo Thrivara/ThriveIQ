@@ -1,0 +1,79 @@
+Implementation Plan — BacklogGenXpert
+
+Paths
+- FEATURE_SPEC: /Users/AmaziN_1/Repos/Thrivara/BacklogGenXpert/specs/001-backloggenxpert-helps-consulting/spec.md
+- IMPL_PLAN: /Users/AmaziN_1/Repos/Thrivara/BacklogGenXpert/specs/001-backloggenxpert-helps-consulting/plan.md
+- SPECS_DIR: /Users/AmaziN_1/Repos/Thrivara/BacklogGenXpert/specs/001-backloggenxpert-helps-consulting
+- BRANCH: 001-backloggenxpert-helps-consulting
+
+Overview
+This document records technical stack and architecture recommendations for implementing the BacklogGenXpert MVP. It maps choices to the spec requirements and notes trade-offs.
+
+1. Frontend
+- Framework: Next.js deployed on Vercel (Edge + SSR where useful). Use React + TypeScript.
+- Styling & UI Kit: Tailwind CSS for utility-first styling; integrate shadcn/ui components for accessible, composable UI primitives.
+- State management: React Query (TanStack Query) for server state and caching; use Zustand for lightweight client state where needed (UI ephemeral state).
+- Routing: Next.js App Router (recommended) for nested layouts and parallel routes.
+- Form handling: React Hook Form with Zod for schema validation.
+- Animations/Transitions: Use Framer Motion for page transitions and complex interactions; use CSS transitions for minor hover effects. Keep motion tokens in design system.
+- Accessibility & Theming: Use shadcn/ui accessibility defaults, build light/dark theme via Tailwind CSS variables and prefer-color-scheme media query. Ensure WCAG 2.1 AA contrast and keyboard navigation.
+
+2. Backend / API
+- Platform: Supabase (Postgres with pgvector, Auth, Storage, Functions).
+- Supabase Functions vs Edge/Serverless: Use Supabase Functions for server-side orchestration that needs DB access and secure secret access; use Vercel Edge Functions for low-latency public endpoints or preview renderers if necessary. Keep LLM calls and long-running jobs in worker functions (off Vercel request path).
+- API Strategy: Use RESTful API endpoints backed by Supabase RPCs for simple flows and tRPC for frontend-typed RPCs if desired. Recommendation: Start with REST + client-side React Query; add tRPC in Phase 2 if type-safety ROI warrants it.
+- Job queueing / background tasks: Use a lightweight queue system. Options:
+  - Use Supabase Realtime + a small background worker (Node.js) triggered by DB inserts (e.g., `runs` table) running on a small container (Railway/Vercel cron/PlanetScale background workers) or use Supabase Functions scheduled by cron.
+  - Alternatively, deploy a BullMQ/RabbitMQ worker if complex job orchestration needed. For MVP: prefer Supabase Functions + a simple worker (Docker service) that polls `runs` table.
+
+3. Database / Data Modeling
+- Postgres schema: create normalized tables per spec: users, workspaces, workspace_members, projects, integrations, templates, contexts, context_chunks, runs, run_items, secrets.
+- Use pgvector extension for `context_chunks.embedding` with an index (IVFFLAT/HNSW depending on vector size) to enable fast similarity searches.
+- Secrets storage: store secret references in `secrets` table with `encrypted_value`; rely on Supabase's vault or integrate an external KMS (AWS KMS / GCP KMS) to wrap per-project keys. Never store plaintext API keys in logs or DB.
+- Index strategy: index foreign keys, created_at, run status, and vector search on `context_chunks(embedding)`.
+
+4. Integrations
+- Jira: Use Jira REST API v3. Implement connectors to map Epic/Story/Task types and preserve hierarchy. Use OAuth2 (3LO) for user-scoped access and OAuth2 app or token with permission for org-scoped operations; support PATs for initial testing.
+- Azure DevOps: Use Azure DevOps REST API with OAuth/service principal (PAT support) and map Boards work item types. Handle Area/Iteration mapping as optional metadata.
+- Confluence: Use Confluence Cloud REST APIs for page retrieval and search; authenticate via OAuth2 or app tokens.
+- SharePoint: Use Microsoft Graph API (Sites/Drive APIs) with delegated or app permissions; support selecting site/folder for context ingestion.
+- Client libraries: Use official SDKs where helpful (atlassian/jira-client, azure-devops-node-api, @microsoft/microsoft-graph-client) but wrap them in a connector abstraction to normalize error handling, rate limits, and mapping.
+- Rate-limit & retry: Implement per-connector rate limiters (token bucket) and exponential backoff with jitter.
+
+5. LLM Providers
+- Abstraction: Implement a provider interface that normalizes request/response across OpenAI, Anthropic, and Google APIs; implement adapters per provider.
+- Per-run model selection: Allow the user to choose model and provider per run. The system will fetch the appropriate API key from encrypted storage at runtime.
+- Default model: Use `GPT-5-auto` as default if available; fallback to configured per-project default model.
+- Streaming & Safety: Use streaming where supported (for better UX) and implement response validation, token limits, and rate limiting.
+
+6. Security
+- AuthN/AuthZ: Supabase Auth as primary identity provider with Entra ID (Azure AD) and Google SSO enabled. Use RLS (Row-Level Security) for multi-tenant isolation in Postgres, enforcing workspace/project scoping.
+- Secrets: Store encrypted secrets in `secrets` table; use KMS to encrypt/decrypt server-side via Supabase Functions.
+- Least privilege: Connector service principals and tokens scoped to minimum permissions; use on-demand consent for user tokens.
+- Audit & Logging: Record run-level audit entries (who, when, template, model, context refs) in `runs` and `run_items`. Obfuscate or redact sensitive fields.
+
+7. DevOps & Tooling
+- Hosting: Frontend on Vercel; backend DB and auth on Supabase; worker may run as a small container on Railway or as a scheduled Supabase Function.
+- CI/CD: GitHub Actions for linting, tests, build, and deployment. Use PR checks and required reviews.
+- Linting & Testing: ESLint + Prettier; TypeScript checks; unit tests with Vitest/Jest; E2E with Playwright (UI flows like auth, file upload, rewrite preview, apply to tracker).
+- Monitoring: Use Sentry for frontend/backend errors, Prometheus/Logflare or Supabase logs for metrics, and a lightweight dashboard (Datadog/Logflare) for job health and queue length.
+
+8. Design System
+- Brand language: implement tokens derived from `design/branding-guidelines.md`.
+- Implementation: Tailwind + shadcn/ui; store tokens in `design/tokens.json` and use a small design-system package (React components) published privately.
+- Motion/Spacing: Centralized motion tokens and spacing scale enforced via Tailwind config and component conventions.
+
+9. Constraints & Risks
+- Supabase limits: watch DB size, storage costs, and pgvector performance. Mitigation: chunk sizes, archival strategy, and incremental embedding processing.
+- Rate limits: Jira/AzDO may throttle; mitigate with batching, retries and user-visible progress.
+- File uploads: large files must be chunked and resumable; implement client-side chunking and server-side reassembly.
+- RAG complexity: embeddings quality and selection affects generated outputs; implement relevance thresholds, human-in-the-loop review, and conservative defaults.
+
+
+Progress tracking
+- Phase 0: research.md (pending)
+- Phase 1: data-model.md, contracts/, quickstart.md (pending)
+- Phase 2: tasks.md (pending)
+
+
+*** End of implementation-plan.md file

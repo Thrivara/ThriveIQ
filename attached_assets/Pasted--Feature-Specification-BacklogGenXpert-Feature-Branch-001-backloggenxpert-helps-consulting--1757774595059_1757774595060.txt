@@ -1,0 +1,239 @@
+# Feature Specification: BacklogGenXpert
+
+**Feature Branch**: `001-backloggenxpert-helps-consulting`  
+**Created**: 2025-09-12  
+**Status**: Draft  
+**Input**: User description: "BacklogGenXpert helps consulting and engineering teams generate, rewrite, and sync backlog items (Epics, Features, User Stories, Tasks, Test Cases) using AI with correct project context. It integrates with Jira and Azure DevOps, supports customizable templates, and leverages Thrivara’s design system."
+
+## Execution Flow (main)
+```
+1. Parse user description from Input
+	→ If empty: ERROR "No feature description provided"
+2. Extract key concepts from description
+	→ Identify: actors, actions, data, constraints
+3. For each unclear aspect:
+	→ Mark with [NEEDS CLARIFICATION: specific question]
+4. Fill User Scenarios & Testing section
+	→ If no clear user flow: ERROR "Cannot determine user scenarios"
+5. Generate Functional Requirements
+	→ Each requirement must be testable
+	→ Mark ambiguous requirements
+6. Identify Key Entities (if data involved)
+7. Run Review Checklist
+	→ If any [NEEDS CLARIFICATION]: WARN "Spec has uncertainties"
+	→ If implementation details found: ERROR "Remove tech details"
+8. Return: SUCCESS (spec ready for planning)
+```
+
+---
+
+## ⚡ Quick Guidelines
+- ✅ Focus on WHAT users need and WHY
+- ❌ Avoid HOW to implement (no tech stack, APIs, code structure)
+- 👥 Written for business stakeholders, not developers
+
+### Section Requirements
+- **Mandatory sections**: Must be completed for every feature
+- **Optional sections**: Include only when relevant to the feature
+- When a section doesn't apply, remove it entirely (don't leave as "N/A")
+
+---
+
+## User Scenarios & Testing *(mandatory)*
+
+### Primary User Story
+As a Contributor in a consulting or engineering team, I want to select existing backlog items (or provide a brief) and use BacklogGenXpert to generate or rewrite Epics, Features, User Stories, Tasks and Test Cases using project-specific context so that backlog items are clear, complete, and ready to be pushed to our tracker (Jira or Azure DevOps).
+
+### Acceptance Scenarios
+1. Given a signed-in Project Admin or Contributor with a project configured, When they upload context (DOCX/PDF/MD) and create or select a template, Then they can select 3+ work items, run a rewrite/generation, preview diffs, and apply accepted changes to Jira or Azure DevOps while preserving hierarchy.
+2. Given a Workspace Owner or Project Admin, When they create a workspace and project and connect Jira or AzDO via OAuth/Service Principal, Then projects store encrypted API keys and can sync updates to the tracker with correct mappings.
+3. Given a user running a generation, When they choose an LLM provider and model, Then the run records audit metadata (user, time, template, model, context refs) and does not log plaintext API keys.
+
+### Edge Cases
+- What happens when the integration token expires mid-run? → Run should fail gracefully, queue retry with exponential backoff, and surface clear remediation steps to the user.
+- How to handle rate-limited trackers? → Batch updates, respect API rate limits, and provide an adjustable retry/backoff strategy per integration.
+- Large context files (100+ MB) → Reject or request user to split; offer client-side chunking and resumable upload.
+- Conflicting hierarchy mappings (e.g., Story already linked to different Epic) → Present conflict resolution UI and do not overwrite without explicit user confirmation.
+
+## Requirements *(mandatory)*
+
+### Functional Requirements
+- **FR-001**: System MUST allow signup/sign-in via Google and Entra ID (Azure AD) SSO. (Acceptance: test account can sign in with both providers)
+- **FR-002**: System MUST support Workspace and Project multi-tenancy: owners, admins, contributors, and viewers.
+- **FR-003**: System MUST allow Project Admins to configure integrations for Jira and Azure DevOps (connect, refresh token, test connection).
+- **FR-004**: System MUST allow Contributors to upload context files (DOCX, PDF, MD, TXT, CSV, JSON) and map Confluence/SharePoint sources to a project.
+- **FR-005**: System MUST store uploaded artifacts in Supabase Storage and create embeddings stored in pgvector (context_chunks).
+- **FR-006**: System MUST let Project Admins configure templates (prompt format) with variables: ${persona}, ${goal}, ${constraints}, ${definition_of_done}, ${references} and version templates per project.
+- **FR-007**: System MUST present a Work Items Browser which can query Jira/AzDO issues by type and status and allow multi-selection.
+- **FR-008**: System MUST allow Contributors to run generate/rewrites for multi-selected items using chosen template + context and preview before applying.
+- **FR-009**: System MUST apply updates back to Jira/AzDO preserving hierarchies, updating descriptions, acceptance criteria, and creating child tasks/test cases when requested.
+- **FR-010**: System MUST support per-project LLM provider configuration and secure key storage; users may supply their own keys for runs.
+- **FR-011**: System MUST record an audit log per run with who, when, template id/version, model, context refs, and before/after diffs; API keys must never be logged.
+- **FR-012**: System MUST provide a comprehensive Design Language & UI Guidelines package that enforces Thrivara’s consulting-grade brand across the product. The package must include:
+	- Design principles and core UX goals (clarity, consistency, responsiveness, subtle delight, accessibility).
+	- A tokenized palette and color system with primary/secondary/neutral tokens and accessible contrast defaults.
+	- Typography scale and defaults for headings, body, and code snippets using recommended font families.
+	- Layout system: 12-column responsive grid, spacing scale, card patterns, and whitespace rules.
+	- Motion system: defined durations, easing, and micro-interaction patterns for buttons, transitions, dropdowns, and feedback states.
+	- Component-level guidance for navigation, tables/lists, forms, diff viewer, and modals; must include accessibility behavior (keyboard, focus states, ARIA where applicable).
+	- Dark mode variants that respect system preference and preserve brand accents.
+	- Iconography guidance and recommended library (lucide-react) with stroke/size conventions.
+	- Deliverables: a Markdown brand spec, a token JSON file (colors/spacing/type), Storybook-ready component examples, and Sketch/Figma (or equivalent) source assets.
+
+*(See `design/branding-guidelines.md` for full details.)*
+
+*Testability notes*: Each FR must map to an automated test or manual acceptance test (see Acceptance Criteria section below).
+
+### Key Entities *(include if feature involves data)*
+- **User**: id, name, email, workspace_membership, role
+- **Workspace**: id, name, owner_id, billing_info
+- **Project**: id, workspace_id, name, default_template_id, llm_provider_config
+- **Integration**: id, project_id, type (jira/azdo/confluence/sharepoint), credentials_ref, metadata
+- **Template**: id, project_id, name, body, version, variables
+- **Context**: id, project_id, source_type (upload/confluence/sharepoint), metadata, storage_path
+- **ContextChunk**: id, context_id, embedding_vector, text, chunk_meta
+- **Run**: id, user_id, project_id, template_id, provider, model, status, created_at, audit_refs
+- **RunItem**: id, run_id, source_item_id, before_json, after_json, status
+- **Secret**: id, project_id, provider, encrypted_value (only stored encrypted)
+
+---
+
+## Review & Acceptance Checklist
+
+### Content Quality
+- [x] No implementation details (languages, frameworks, APIs) in requirements (implementation notes are in Hosting & Platform Constraints section below as non-normative guidance)
+- [x] Focused on user value and business needs
+- [x] Written for non-technical stakeholders
+- [x] All mandatory sections completed
+
+- ### Requirement Completeness
+- [x] No [NEEDS CLARIFICATION] markers remain
+- [x] Requirements are testable and unambiguous where specified
+- [x] Success criteria are measurable (see Acceptance Criteria section below)
+- [x] Scope is clearly bounded to MVP features listed
+- [x] Dependencies and assumptions identified
+
+---
+
+## Hosting & Platform Constraints *(non-normative / implementation guidance)*
+- Frontend hosting: Vercel (Next.js + Edge)
+- Backend & DB: Supabase (Postgres, Auth, Storage, Functions)
+- Auth: Supabase Auth with support for Entra ID (Azure AD), Google, and Okta (via OIDC/SAML)
+- Storage: Supabase Storage for file uploads
+- Vector DB: pgvector on Supabase
+- Secrets: Supabase Vault or KMS integration; encrypt all API keys
+
+## Acceptance Criteria (MVP)
+- User can sign up/sign in with Google or Entra ID.  
+- User can create a workspace + project, connect Jira or AzDO.  
+- User can upload a file as context and create a template.  
+- User can browse work items, select 3+ stories, generate rewrites, preview diffs, and apply updates.  
+- Jira/ADO hierarchies preserved; ACs and child tasks generated where requested.  
+- Confluence integration allows selecting a space and retrieving content as context.  
+- API keys are encrypted in Supabase Vault and never logged.
+
+## Risks
+- **Supabase limits**: may require optimizing storage and RAG (chunk sizes, caching). Mitigation: design chunker, rate-limit embedding jobs, archive old contexts.
+- **Jira/AzDO rate limits**: mitigate with batching + retries, exponential backoff, and user-visible throttling messages.
+- **Confluence/SharePoint auth complexity**: may need app registrations + consent; plan to provide step-by-step setup flows and fallbacks (token upload).
+- **LLM cost and hallucination risk**: implement prompt validation, guardrails, and human-in-the-loop acceptance before write-back.
+
+## Data Model (Supabase) - ERD Summary
+Tables and notable fields (normalized):
+- users(id, name, email)
+- workspaces(id, name, owner_id)
+- workspace_members(id, workspace_id, user_id, role)
+- projects(id, workspace_id, name, default_template_id, llm_provider_config)
+- integrations(id, project_id, type, credentials_ref, metadata)
+- templates(id, project_id, name, body, version)
+- contexts(id, project_id, source_type, metadata, storage_path)
+- context_chunks(id, context_id, embedding, text, chunk_meta)
+- runs(id, user_id, project_id, template_id, provider, model, status, created_at)
+- run_items(id, run_id, source_item_id, before_json, after_json, status)
+- secrets(id, project_id, provider, encrypted_value)
+
+*(Deliverable: produce ERD SVG/PNG and attach next to this spec during planning.)*
+
+## Architecture (high level)
+- Frontend: Next.js app deployed to Vercel with Edge functions for fast UI routing and SSR where needed.
+- Backend: Supabase Postgres + pgvector for embeddings, Supabase Functions for server-side orchestration, and secure storage for files.
+- Worker/Jobs: A queue (e.g., Supabase functions + background worker or external job runner) to handle embedding generation, LLM calls, and tracker syncs.
+- Integrations: Connector layer for Jira/AzDO/Confluence/SharePoint with credential vaulting, rate-limit handling, and connector tests.
+- Audit & Logging: Structured audit records in Postgres; obfuscate/encrypt any sensitive fields; separate diagnostics logs for internal troubleshooting.
+
+*(Deliverable: create an architecture diagram PNG/SVG to attach to this spec.)*
+
+## Work Breakdown & Prioritization (MVP)
+1. Core platform & authentication (Supabase auth, SSO with Google + Entra ID) — 2 weeks
+2. Workspace/Project model + RBAC basics — 1 week
+3. Integrations baseline: Jira + AzDO connectors (read-only listing, mapping) — 3 weeks
+4. File uploads, storage, and embedding pipeline (pgvector) — 2 weeks
+5. Templates UI + versioning — 1 week
+6. Work Items Browser + multi-select rewrite flow + preview — 3 weeks
+7. Apply/Sync updates to trackers (write) with hierarchy preservation — 2 weeks
+8. Audit/logging and run history UI — 1 week
+9. Branding and UX polish (Thrivara design tokens) — 1 week
+
+Total MVP estimated: 12–16 weeks (4–5 engineers + 1 designer + 1 QA)
+
+## Starter Templates (deliverables)
+
+### Agile Story (Gherkin)
+```
+Feature: ${goal}
+  As a ${persona}
+  I want ${goal}
+  So that ${value}
+
+  Scenario: Basic acceptance
+	 Given ${precondition}
+	 When ${action}
+	 Then ${expected_result}
+```
+
+### Agile Story (Bullets)
+- Title: ${short_title}
+- Description: ${goal}
+- Acceptance Criteria:
+  - ${definition_of_done}
+- References: ${references}
+
+### Bug Fix Rewrite
+- Title: [BUG] ${short_title}
+- Description: Steps to reproduce, expected vs actual
+- Root cause hypothesis: ${constraints}
+- Acceptance Criteria:
+  - Repro: ${repro_steps}
+  - Fix validation: ${validation_steps}
+
+### Tech Task with DoD
+- Title: ${short_title}
+- Description: ${goal}
+- Definition of Done:
+  - Code implemented and reviewed
+  - Unit tests added
+  - Integration tested in staging
+  - Documentation updated
+
+---
+
+## Next Steps
+1. Attach architecture diagram and ERD to this spec (SVG/PNG).  
+2. Create issues for top 5 epics from Work Breakdown and assign sprint priorities.  
+3. Prepare connector test harnesses for Jira and AzDO with sample projects.  
+4. Add CI checks to ensure API keys are never printed to logs and that secrets table only stores encrypted values.
+
+## Execution Status
+- [x] User description parsed
+- [x] Key concepts extracted
+- [x] Ambiguities marked and resolved
+- [x] User scenarios defined
+- [x] Requirements generated
+- [x] Entities identified
+- [x] Review checklist passed
+
+## Questions / Clarifications (resolved)
+- Billing model: Per your preference we will keep the system simple for MVP — runs will use per-project / per-user LLM API keys and customers will be billed via their own provider accounts. Centralized platform billing for LLM usage is a later-phase enhancement (requires admin UI for consumption, credits, invoicing).
+- SSO providers for MVP: Local account + Entra ID (Azure AD) + Google are targeted for MVP. Okta and additional enterprise SSO providers are filed for a later phase.
+- Data residency: Supabase will be hosted in United States regions for the MVP to meet US data residency requirements.
+
