@@ -11,28 +11,29 @@ export default function Landing() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       {/* Hero Section */}
-      <section className="relative px-6 lg:px-8 py-24 sm:py-32">
-        <div className="mx-auto max-w-4xl text-center">
+      <section className="relative px-6 lg:px-8 py-24 sm:py-32 overflow-hidden">
+        <div className="absolute inset-0 gradient-hero opacity-10"></div>
+        <div className="relative mx-auto max-w-4xl text-center">
           <div className="flex items-center justify-center space-x-3 mb-8">
-            <div className="w-12 h-12 bg-primary rounded-lg flex items-center justify-center">
-              <Zap className="w-8 h-8 text-primary-foreground" />
+            <div className="w-12 h-12 gradient-primary rounded-xl flex items-center justify-center shadow-lg">
+              <Zap className="w-8 h-8 text-white" />
             </div>
-            <h1 className="text-4xl font-bold tracking-tight sm:text-6xl">
+            <h1 className="text-4xl font-bold tracking-tight sm:text-6xl gradient-text">
               BacklogGenXpert
             </h1>
           </div>
           
-          <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto">
+          <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto leading-relaxed">
             AI-powered backlog management platform that generates, rewrites, and syncs work items with Jira and Azure DevOps using project context.
           </p>
           
           <div className="flex flex-col sm:flex-row gap-4 justify-center mb-12">
-            <Button size="lg" onClick={handleLogin} className="text-lg px-8 py-4" data-testid="button-login">
+            <Button size="lg" onClick={handleLogin} className="btn-primary text-lg px-8 py-4 shadow-lg" data-testid="button-login">
               <Sparkles className="w-5 h-5 mr-2" />
               Get Started
               <ArrowRight className="w-5 h-5 ml-2" />
             </Button>
-            <Button size="lg" variant="outline" className="text-lg px-8 py-4" data-testid="button-learn-more">
+            <Button size="lg" variant="outline" className="text-lg px-8 py-4 border-2 hover:bg-accent hover:text-accent-foreground transition-all" data-testid="button-learn-more">
               Learn More
             </Button>
           </div>
@@ -60,85 +61,85 @@ export default function Landing() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            <Card>
+            <Card className="card hover:shadow-xl transition-all duration-300">
               <CardHeader>
-                <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center mb-4">
-                  <Sparkles className="w-6 h-6 text-primary" />
+                <div className="w-12 h-12 gradient-primary rounded-xl flex items-center justify-center mb-4 shadow-md">
+                  <Sparkles className="w-6 h-6 text-white" />
                 </div>
-                <CardTitle>AI-Powered Generation</CardTitle>
+                <CardTitle className="text-xl">AI-Powered Generation</CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-muted-foreground">
+                <p className="text-muted-foreground leading-relaxed">
                   Generate comprehensive Epics, Features, User Stories, and Tasks using advanced AI with project-specific context.
                 </p>
               </CardContent>
             </Card>
 
-            <Card>
+            <Card className="card hover:shadow-xl transition-all duration-300">
               <CardHeader>
-                <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center mb-4">
-                  <GitBranch className="w-6 h-6 text-primary" />
+                <div className="w-12 h-12 gradient-accent rounded-xl flex items-center justify-center mb-4 shadow-md">
+                  <GitBranch className="w-6 h-6 text-white" />
                 </div>
-                <CardTitle>Seamless Integration</CardTitle>
+                <CardTitle className="text-xl">Seamless Integration</CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-muted-foreground">
+                <p className="text-muted-foreground leading-relaxed">
                   Connect with Jira, Azure DevOps, Confluence, and SharePoint to sync updates while preserving hierarchies.
                 </p>
               </CardContent>
             </Card>
 
-            <Card>
+            <Card className="card hover:shadow-xl transition-all duration-300">
               <CardHeader>
-                <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center mb-4">
-                  <ClipboardList className="w-6 h-6 text-primary" />
+                <div className="w-12 h-12 bg-secondary rounded-xl flex items-center justify-center mb-4 shadow-md">
+                  <ClipboardList className="w-6 h-6 text-secondary-foreground" />
                 </div>
-                <CardTitle>Smart Templates</CardTitle>
+                <CardTitle className="text-xl">Smart Templates</CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-muted-foreground">
+                <p className="text-muted-foreground leading-relaxed">
                   Customizable prompt templates with variable substitution for consistent, high-quality work item generation.
                 </p>
               </CardContent>
             </Card>
 
-            <Card>
+            <Card className="card hover:shadow-xl transition-all duration-300">
               <CardHeader>
-                <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center mb-4">
-                  <Users className="w-6 h-6 text-primary" />
+                <div className="w-12 h-12 bg-accent rounded-xl flex items-center justify-center mb-4 shadow-md">
+                  <Users className="w-6 h-6 text-accent-foreground" />
                 </div>
-                <CardTitle>Multi-Tenant Workspaces</CardTitle>
+                <CardTitle className="text-xl">Multi-Tenant Workspaces</CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-muted-foreground">
+                <p className="text-muted-foreground leading-relaxed">
                   Role-based access control with workspace and project management for teams of any size.
                 </p>
               </CardContent>
             </Card>
 
-            <Card>
+            <Card className="card hover:shadow-xl transition-all duration-300">
               <CardHeader>
-                <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center mb-4">
-                  <Shield className="w-6 h-6 text-primary" />
+                <div className="w-12 h-12 gradient-primary rounded-xl flex items-center justify-center mb-4 shadow-md">
+                  <Shield className="w-6 h-6 text-white" />
                 </div>
-                <CardTitle>Enterprise Security</CardTitle>
+                <CardTitle className="text-xl">Enterprise Security</CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-muted-foreground">
+                <p className="text-muted-foreground leading-relaxed">
                   Encrypted secret storage, comprehensive audit logging, and enterprise-grade authentication.
                 </p>
               </CardContent>
             </Card>
 
-            <Card>
+            <Card className="card hover:shadow-xl transition-all duration-300">
               <CardHeader>
-                <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center mb-4">
-                  <Rocket className="w-6 h-6 text-primary" />
+                <div className="w-12 h-12 gradient-accent rounded-xl flex items-center justify-center mb-4 shadow-md">
+                  <Rocket className="w-6 h-6 text-white" />
                 </div>
-                <CardTitle>Context-Aware AI</CardTitle>
+                <CardTitle className="text-xl">Context-Aware AI</CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-muted-foreground">
+                <p className="text-muted-foreground leading-relaxed">
                   Upload project documents to provide AI with relevant context for more accurate and useful generations.
                 </p>
               </CardContent>
@@ -161,31 +162,31 @@ export default function Landing() {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-12">
             <div className="text-center">
-              <div className="w-16 h-16 bg-primary rounded-full flex items-center justify-center mx-auto mb-6">
-                <span className="text-2xl font-bold text-primary-foreground">1</span>
+              <div className="w-16 h-16 gradient-primary rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg">
+                <span className="text-2xl font-bold text-white">1</span>
               </div>
               <h3 className="text-xl font-semibold mb-4">Connect & Configure</h3>
-              <p className="text-muted-foreground">
+              <p className="text-muted-foreground leading-relaxed">
                 Set up your workspace, connect to Jira or Azure DevOps, and upload project context files.
               </p>
             </div>
 
             <div className="text-center">
-              <div className="w-16 h-16 bg-primary rounded-full flex items-center justify-center mx-auto mb-6">
-                <span className="text-2xl font-bold text-primary-foreground">2</span>
+              <div className="w-16 h-16 gradient-accent rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg">
+                <span className="text-2xl font-bold text-white">2</span>
               </div>
               <h3 className="text-xl font-semibold mb-4">Select & Generate</h3>
-              <p className="text-muted-foreground">
+              <p className="text-muted-foreground leading-relaxed">
                 Browse work items, select multiple items, choose a template, and let AI enhance them with context.
               </p>
             </div>
 
             <div className="text-center">
-              <div className="w-16 h-16 bg-primary rounded-full flex items-center justify-center mx-auto mb-6">
-                <span className="text-2xl font-bold text-primary-foreground">3</span>
+              <div className="w-16 h-16 bg-secondary rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg">
+                <span className="text-2xl font-bold text-secondary-foreground">3</span>
               </div>
               <h3 className="text-xl font-semibold mb-4">Review & Apply</h3>
-              <p className="text-muted-foreground">
+              <p className="text-muted-foreground leading-relaxed">
                 Preview AI-generated changes, review diffs, and selectively apply updates back to your tracker.
               </p>
             </div>
