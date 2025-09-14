@@ -7,8 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Folder, Upload, FileText, File, Trash2, Download, Eye } from "lucide-react";
 
-// Mock project ID for now - will be replaced with proper workspace context
-const MOCK_PROJECT_ID = "550e8400-e29b-41d4-a716-446655440000";
+import { useCurrentProject } from "@/hooks/useCurrentProject";
 
 interface ContextFile {
   id: string;
@@ -26,13 +25,14 @@ interface ContextFile {
 export default function ContextFiles() {
   const { toast } = useToast();
   const { isAuthenticated, isLoading } = useAuth();
+  const { projectId, isLoading: loadingProject } = useCurrentProject();
   const [dragActive, setDragActive] = useState(false);
   const queryClient = useQueryClient();
 
   // Fetch context files
-  const { data: contextFiles = [], isLoading: filesLoading, refetch } = useQuery<ContextFile[]>({
-    queryKey: ['/api/projects', MOCK_PROJECT_ID, 'contexts'],
-    enabled: isAuthenticated && !isLoading,
+  const { data: contextFiles = [], isLoading: filesLoading } = useQuery<ContextFile[]>({
+    queryKey: projectId ? ['/api/projects', projectId, 'contexts'] : ['disabled'],
+    enabled: !!projectId && isAuthenticated && !isLoading,
   });
 
   // Upload mutation
@@ -41,7 +41,8 @@ export default function ContextFiles() {
       const formData = new FormData();
       formData.append('file', file);
       
-      const response = await fetch(`/api/projects/${MOCK_PROJECT_ID}/contexts/upload`, {
+      if (!projectId) throw new Error('No project selected');
+      const response = await fetch(`/api/projects/${projectId}/contexts/upload`, {
         method: 'POST',
         body: formData,
       });
@@ -58,7 +59,9 @@ export default function ContextFiles() {
         title: "File uploaded successfully",
         description: "Your file has been processed and is ready for AI generation.",
       });
-      queryClient.invalidateQueries({ queryKey: ['/api/projects', MOCK_PROJECT_ID, 'contexts'] });
+      if (projectId) {
+        queryClient.invalidateQueries({ queryKey: ['/api/projects', projectId, 'contexts'] });
+      }
     },
     onError: (error: any) => {
       toast({
@@ -153,7 +156,7 @@ export default function ContextFiles() {
     return <File className="w-4 h-4 text-gray-500" />;
   };
 
-  if (isLoading || !isAuthenticated) {
+  if (isLoading || loadingProject || !isAuthenticated || !projectId) {
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="flex items-center space-x-2">

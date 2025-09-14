@@ -8,11 +8,11 @@ export async function GET() {
   if (!userId) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
   const { data, error } = await supabase
     .from('workspace_members')
-    .select('workspace:*')
+    .select('workspaces(*)')
     .eq('user_id', userId);
 
   if (error) return NextResponse.json({ message: error.message }, { status: 500 });
-  const workspaces = (data ?? []).map((r: any) => r.workspace);
+  const workspaces = (data ?? []).map((r: any) => r.workspaces);
   return NextResponse.json(workspaces);
 }
 
@@ -21,6 +21,16 @@ export async function POST(req: Request) {
   const { data: auth } = await supabase.auth.getUser();
   const userId = auth?.user?.id;
   if (!userId) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+
+  // Ensure user row exists before creating workspace (FK constraint)
+  const { data: existingUser } = await supabase
+    .from('users')
+    .select('id')
+    .eq('id', userId)
+    .maybeSingle();
+  if (!existingUser) {
+    await supabase.from('users').insert({ id: userId, email: auth.user.email });
+  }
 
   const body = await req.json();
   const { name, billingInfo } = body || {};

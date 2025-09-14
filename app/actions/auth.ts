@@ -49,7 +49,7 @@ export async function signInWithPassword(formData: FormData) {
   const supabase = getServerClient();
   const { error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) return { ok: false, error: error.message } as const;
-  return { ok: true } as const;
+  return { ok: true, redirectTo: '/' } as const;
 }
 
 export async function signUpWithPassword(formData: FormData) {
@@ -65,7 +65,7 @@ export async function signUpWithPassword(formData: FormData) {
 export async function signInWithProvider(provider: 'google' | 'azure') {
   const supabase = getServerClient();
   const redirectTo = `${process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'}/auth/callback`;
-  const { error } = await supabase.auth.signInWithOAuth({ provider, options: { redirectTo } });
+  const { data, error } = await supabase.auth.signInWithOAuth({ provider, options: { redirectTo } });
   if (error) return { ok: false, error: error.message } as const;
-  return { ok: true } as const;
+  return { ok: true, url: data?.url ?? null } as const;
 }

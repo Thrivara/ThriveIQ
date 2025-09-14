@@ -9,15 +9,15 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
-import { GitBranch, Plus, Settings, CheckCircle, XCircle, Loader2, TestTube } from "lucide-react";
+import { GitBranch, Plus, Settings, CheckCircle, XCircle, Loader2, TestTube, Trash2 } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { apiRequest } from "@/lib/queryClient";
+import { useCurrentProject } from "@/hooks/useCurrentProject";
 import type { Integration } from "@shared/schema";
 
-// Hardcoded project ID for testing - in production, this would come from context/params
-const TEST_PROJECT_ID = "550e8400-e29b-41d4-a716-446655440000";
+// Use current project derived from the user's first workspace/projects
 
 const azureDevOpsFormSchema = z.object({
   organization: z.string().min(1, "Organization is required"),
@@ -30,8 +30,10 @@ type AzureDevOpsFormData = z.infer<typeof azureDevOpsFormSchema>;
 export default function Integrations() {
   const { toast } = useToast();
   const { isAuthenticated, isLoading } = useAuth();
+  const { projectId, isLoading: loadingProject } = useCurrentProject();
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editIntegration, setEditIntegration] = useState<Integration | null>(null);
   const [testingConnection, setTestingConnection] = useState<string | null>(null);
 
   const form = useForm<AzureDevOpsFormData>({
@@ -45,21 +47,22 @@ export default function Integrations() {
 
   // Fetch integrations
   const { data: integrations = [], isLoading: integrationsLoading } = useQuery<Integration[]>({
-    queryKey: ["/api/projects", TEST_PROJECT_ID, "integrations"],
-    enabled: isAuthenticated,
+    queryKey: projectId ? ["/api/projects", projectId, "integrations"] : ["disabled"],
+    enabled: !!projectId && isAuthenticated,
   });
 
   // Create integration mutation
   const createIntegrationMutation = useMutation({
     mutationFn: async (data: AzureDevOpsFormData) => {
       // First, store the credentials securely
-      await apiRequest("POST", `/api/projects/${TEST_PROJECT_ID}/secrets`, {
+      if (!projectId) throw new Error('No project selected');
+      await apiRequest("POST", `/api/projects/${projectId}/secrets`, {
         provider: "azure_devops",
         encryptedValue: JSON.stringify(data),
       });
 
       // Then create the integration record
-      return apiRequest("POST", `/api/projects/${TEST_PROJECT_ID}/integrations`, {
+      return apiRequest("POST", `/api/projects/${projectId}/integrations`, {
         type: "azure_devops",
         metadata: {
           organization: data.organization,
@@ -68,7 +71,7 @@ export default function Integrations() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/projects", TEST_PROJECT_ID, "integrations"] });
+      if (projectId) queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "integrations"] });
       setDialogOpen(false);
       form.reset();
       toast({
@@ -85,16 +88,70 @@ export default function Integrations() {
     },
   });
 
+  // Update integration metadata and/or PAT
+  const updateIntegrationMutation = useMutation({
+    mutationFn: async ({ integrationId, data }: { integrationId: string; data: AzureDevOpsFormData }) => {
+      if (!projectId) throw new Error('No project selected');
+      // Update secret first (PAT)
+      await apiRequest("POST", `/api/projects/${projectId}/secrets`, {
+        provider: "azure_devops",
+        encryptedValue: JSON.stringify(data),
+      });
+      // Update integration metadata
+      return apiRequest("PATCH", `/api/projects/${projectId}/integrations/${integrationId}`, {
+        metadata: { organization: data.organization, project: data.project },
+      });
+    },
+    onSuccess: () => {
+      if (projectId) queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "integrations"] });
+      setDialogOpen(false);
+      setEditIntegration(null);
+      form.reset();
+      toast({ title: "Updated", description: "Integration updated successfully." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Error", description: error.message || "Failed to update integration", variant: "destructive" });
+    },
+  });
+
+  const deleteIntegrationMutation = useMutation({
+    mutationFn: async (integrationId: string) => {
+      if (!projectId) throw new Error('No project selected');
+      return apiRequest("DELETE", `/api/projects/${projectId}/integrations/${integrationId}`);
+    },
+    onSuccess: () => {
+      if (projectId) queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "integrations"] });
+      toast({ title: "Removed", description: "Integration removed." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Error", description: error.message || "Failed to remove integration", variant: "destructive" });
+    },
+  });
+
+  const toggleActiveMutation = useMutation({
+    mutationFn: async (integration: Integration) => {
+      if (!projectId) throw new Error('No project selected');
+      return apiRequest("PATCH", `/api/projects/${projectId}/integrations/${integration.id}`, {
+        isActive: !integration.isActive,
+      });
+    },
+    onSuccess: () => {
+      if (projectId) queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "integrations"] });
+    },
+  });
+
   // Test connection mutation
   const testConnectionMutation = useMutation({
     mutationFn: async (integrationId: string) => {
-      return apiRequest("POST", `/api/projects/${TEST_PROJECT_ID}/integrations/${integrationId}/test`);
+      if (!projectId) throw new Error('No project selected');
+      return apiRequest("POST", `/api/projects/${projectId}/integrations/${integrationId}/test`);
     },
     onSuccess: () => {
       toast({
         title: "Connection Test Passed",
         description: "Successfully connected to Azure DevOps!",
       });
+      if (projectId) queryClient.invalidateQueries({ queryKey: ["/api/projects", projectId, "integrations"] });
     },
     onError: (error: any) => {
       toast({
@@ -109,7 +166,11 @@ export default function Integrations() {
   });
 
   const handleSubmit = (data: AzureDevOpsFormData) => {
-    createIntegrationMutation.mutate(data);
+    if (editIntegration) {
+      updateIntegrationMutation.mutate({ integrationId: editIntegration.id, data });
+    } else {
+      createIntegrationMutation.mutate(data);
+    }
   };
 
   const handleTestConnection = (integrationId: string) => {
@@ -131,7 +192,7 @@ export default function Integrations() {
     }
   }, [isAuthenticated, isLoading, toast]);
 
-  if (isLoading || !isAuthenticated) {
+  if (isLoading || loadingProject || !isAuthenticated || !projectId) {
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="flex items-center space-x-2">
@@ -150,7 +211,7 @@ export default function Integrations() {
             <h1 className="text-2xl font-bold">Integrations</h1>
             <p className="text-muted-foreground">Connect and manage integrations with Azure DevOps, Jira, and other tools</p>
           </div>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <Dialog open={dialogOpen} onOpenChange={(o) => { setDialogOpen(o); if (!o) setEditIntegration(null); }}>
             <DialogTrigger asChild>
               <Button className="bg-gradient-to-r from-primary to-primary/80" data-testid="button-add-integration">
                 <Plus className="w-4 h-4 mr-2" />
@@ -159,7 +220,7 @@ export default function Integrations() {
             </DialogTrigger>
             <DialogContent className="sm:max-w-[500px]">
               <DialogHeader>
-                <DialogTitle>Add Azure DevOps Integration</DialogTitle>
+                <DialogTitle>{editIntegration ? 'Configure Azure DevOps' : 'Add Azure DevOps Integration'}</DialogTitle>
               </DialogHeader>
               <Form {...form}>
                 <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
@@ -226,13 +287,13 @@ export default function Integrations() {
                     </Button>
                     <Button
                       type="submit"
-                      disabled={createIntegrationMutation.isPending}
+                      disabled={createIntegrationMutation.isPending || updateIntegrationMutation.isPending}
                       data-testid="button-create-integration"
                     >
-                      {createIntegrationMutation.isPending && (
+                      {(createIntegrationMutation.isPending || updateIntegrationMutation.isPending) && (
                         <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                       )}
-                      Create Integration
+                      {editIntegration ? 'Save Changes' : 'Create Integration'}
                     </Button>
                   </div>
                 </form>
@@ -335,9 +396,39 @@ export default function Integrations() {
                         )}
                         Test Connection
                       </Button>
-                      <Button variant="outline" size="sm" data-testid={`button-configure-${integration.id}`}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        data-testid={`button-configure-${integration.id}`}
+                        onClick={() => {
+                          setEditIntegration(integration);
+                          form.reset({
+                            organization: (integration.metadata as any)?.organization || '',
+                            project: (integration.metadata as any)?.project || '',
+                            personalAccessToken: '',
+                          });
+                          setDialogOpen(true);
+                        }}
+                      >
                         <Settings className="w-4 h-4 mr-1" />
                         Configure
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => deleteIntegrationMutation.mutate(integration.id)}
+                        data-testid={`button-delete-${integration.id}`}
+                      >
+                        <Trash2 className="w-4 h-4 mr-1" />
+                        Remove
+                      </Button>
+                      <Button
+                        variant={integration.isActive ? "outline" : "default"}
+                        size="sm"
+                        onClick={() => toggleActiveMutation.mutate(integration)}
+                        data-testid={`button-toggle-${integration.id}`}
+                      >
+                        {integration.isActive ? 'Deactivate' : 'Activate'}
                       </Button>
                     </div>
                   </div>
