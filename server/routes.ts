@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
+import { authenticate } from "./auth";
 import { insertWorkspaceSchema, insertProjectSchema, insertTemplateSchema, insertIntegrationSchema, insertContextSchema, insertRunSchema, insertSecretSchema } from "@shared/schema";
 import { z } from "zod";
 import multer from "multer";
@@ -14,14 +14,22 @@ import { embeddingsService } from "./services/embeddings";
 const upload = multer({ storage: multer.memoryStorage() });
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Auth middleware
-  await setupAuth(app);
+  // Supabase Auth is token-based; no app-level setup required
 
   // Auth routes
-  app.get('/api/auth/user', isAuthenticated, async (req: any, res) => {
+  app.get('/api/auth/user', authenticate, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
-      const user = await storage.getUser(userId);
+      const userId = req.user.id;
+      let user = await storage.getUser(userId);
+      if (!user) {
+        user = await storage.upsertUser({
+          id: userId,
+          email: req.user.email,
+          firstName: undefined,
+          lastName: undefined,
+          profileImageUrl: undefined,
+        });
+      }
       res.json(user);
     } catch (error) {
       console.error("Error fetching user:", error);
@@ -30,9 +38,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Workspace routes
-  app.get('/api/workspaces', isAuthenticated, async (req: any, res) => {
+  app.get('/api/workspaces', authenticate, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       const workspaces = await storage.getWorkspacesByUserId(userId);
       res.json(workspaces);
     } catch (error) {
@@ -41,9 +49,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/workspaces', isAuthenticated, async (req: any, res) => {
+  app.post('/api/workspaces', authenticate, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       const validatedData = insertWorkspaceSchema.parse(req.body);
       const workspace = await storage.createWorkspace({ ...validatedData, ownerId: userId });
       res.json(workspace);
@@ -53,10 +61,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/workspaces/:workspaceId/members', isAuthenticated, async (req: any, res) => {
+  app.get('/api/workspaces/:workspaceId/members', authenticate, async (req: any, res) => {
     try {
       const { workspaceId } = req.params;
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       
       // Check user has access to workspace
       const role = await storage.getUserWorkspaceRole(workspaceId, userId);
@@ -73,10 +81,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Project routes
-  app.get('/api/workspaces/:workspaceId/projects', isAuthenticated, async (req: any, res) => {
+  app.get('/api/workspaces/:workspaceId/projects', authenticate, async (req: any, res) => {
     try {
       const { workspaceId } = req.params;
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       
       // Check user has access to workspace
       const role = await storage.getUserWorkspaceRole(workspaceId, userId);
@@ -92,10 +100,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/workspaces/:workspaceId/projects', isAuthenticated, async (req: any, res) => {
+  app.post('/api/workspaces/:workspaceId/projects', authenticate, async (req: any, res) => {
     try {
       const { workspaceId } = req.params;
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       
       // Check user has admin access
       const role = await storage.getUserWorkspaceRole(workspaceId, userId);
@@ -112,10 +120,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/projects/:projectId', isAuthenticated, async (req: any, res) => {
+  app.get('/api/projects/:projectId', authenticate, async (req: any, res) => {
     try {
       const { projectId } = req.params;
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -136,10 +144,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Integration routes
-  app.get('/api/projects/:projectId/integrations', isAuthenticated, async (req: any, res) => {
+  app.get('/api/projects/:projectId/integrations', authenticate, async (req: any, res) => {
     try {
       const { projectId } = req.params;
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -159,10 +167,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/projects/:projectId/integrations', isAuthenticated, async (req: any, res) => {
+  app.post('/api/projects/:projectId/integrations', authenticate, async (req: any, res) => {
     try {
       const { projectId } = req.params;
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -184,10 +192,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Secrets routes
-  app.post('/api/projects/:projectId/secrets', isAuthenticated, async (req: any, res) => {
+  app.post('/api/projects/:projectId/secrets', authenticate, async (req: any, res) => {
     try {
       const { projectId } = req.params;
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -209,7 +217,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Integration testing routes
-  app.post('/api/projects/:projectId/integrations/:integrationId/test', isAuthenticated, async (req: any, res) => {
+  app.post('/api/projects/:projectId/integrations/:integrationId/test', authenticate, async (req: any, res) => {
     try {
       const { projectId, integrationId } = req.params;
       const userId = req.user.claims.sub;
@@ -274,10 +282,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Template routes
-  app.get('/api/projects/:projectId/templates', isAuthenticated, async (req: any, res) => {
+  app.get('/api/projects/:projectId/templates', authenticate, async (req: any, res) => {
     try {
       const { projectId } = req.params;
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -297,10 +305,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/projects/:projectId/templates', isAuthenticated, async (req: any, res) => {
+  app.post('/api/projects/:projectId/templates', authenticate, async (req: any, res) => {
     try {
       const { projectId } = req.params;
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -322,10 +330,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Context file routes
-  app.get('/api/projects/:projectId/contexts', isAuthenticated, async (req: any, res) => {
+  app.get('/api/projects/:projectId/contexts', authenticate, async (req: any, res) => {
     try {
       const { projectId } = req.params;
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -345,10 +353,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/projects/:projectId/contexts/upload', isAuthenticated, upload.single('file'), async (req: any, res) => {
+  app.post('/api/projects/:projectId/contexts/upload', authenticate, upload.single('file'), async (req: any, res) => {
     try {
       const { projectId } = req.params;
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -380,11 +388,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Work items routes (integration-specific)
-  app.get('/api/projects/:projectId/work-items', isAuthenticated, async (req: any, res) => {
+  app.get('/api/projects/:projectId/work-items', authenticate, async (req: any, res) => {
     try {
       const { projectId } = req.params;
       const { type, status, integration } = req.query;
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -423,10 +431,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Run routes
-  app.get('/api/projects/:projectId/runs', isAuthenticated, async (req: any, res) => {
+  app.get('/api/projects/:projectId/runs', authenticate, async (req: any, res) => {
     try {
       const { projectId } = req.params;
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -446,10 +454,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/projects/:projectId/runs', isAuthenticated, async (req: any, res) => {
+  app.post('/api/projects/:projectId/runs', authenticate, async (req: any, res) => {
     try {
       const { projectId } = req.params;
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       
       const project = await storage.getProject(projectId);
       if (!project) {
@@ -490,10 +498,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/runs/:runId/items', isAuthenticated, async (req: any, res) => {
+  app.get('/api/runs/:runId/items', authenticate, async (req: any, res) => {
     try {
       const { runId } = req.params;
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       
       const run = await storage.getRun(runId);
       if (!run) {
@@ -518,11 +526,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/runs/:runId/apply', isAuthenticated, async (req: any, res) => {
+  app.post('/api/runs/:runId/apply', authenticate, async (req: any, res) => {
     try {
       const { runId } = req.params;
       const { selectedItemIds } = req.body;
-      const userId = req.user.claims.sub;
+      const userId = req.user.id;
       
       const run = await storage.getRun(runId);
       if (!run) {
