@@ -1,8 +1,8 @@
-# BacklogGenXpert
+# ThriveIQ
 
 ## Overview
 
-BacklogGenXpert is an AI-powered backlog management platform that helps consulting and engineering teams generate, rewrite, and sync work items (Epics, Features, User Stories, Tasks, Test Cases) using AI with project context. The application integrates with Jira, Azure DevOps, Confluence, and SharePoint to provide seamless work item management and AI-enhanced content generation.
+ThriveIQ is an AI-powered backlog management platform that helps consulting and engineering teams generate, rewrite, and sync work items (Epics, Features, User Stories, Tasks, Test Cases) using AI with project context. The application integrates with Jira, Azure DevOps, Confluence, and SharePoint to provide seamless work item management and AI-enhanced content generation.
 
 The system allows users to upload context files, create templates, select work items from integrated platforms, and use AI to generate or enhance backlog content. It features multi-tenant workspace management with role-based access control and comprehensive audit logging.
 
@@ -13,7 +13,7 @@ Preferred communication style: Simple, everyday language.
 ## System Architecture
 
 ### Frontend Architecture
-- **Framework**: React with TypeScript using Vite for development and building
+- **Framework**: Next.js using Vite for development and building
 - **UI Framework**: shadcn/ui components built on Radix UI primitives with Tailwind CSS for styling
 - **State Management**: TanStack React Query for server state management and caching
 - **Routing**: Wouter for client-side routing with a simple, lightweight approach
@@ -22,9 +22,8 @@ Preferred communication style: Simple, everyday language.
 
 ### Backend Architecture
 - **Runtime**: Node.js with Express.js web framework
-- **Database ORM**: Drizzle ORM with PostgreSQL support via Neon serverless
-- **Authentication**: Replit-based OpenID Connect (OIDC) authentication with session management
-- **Session Storage**: PostgreSQL-backed session store using connect-pg-simple
+- **Database ORM**: Drizzle ORM with PostgreSQL (Supabase-compatible via `pg`)
+- **Authentication**: Supabase Auth (JWT) via Authorization header
 - **API Design**: RESTful API endpoints with Express.js routing
 
 ### Database Design
@@ -44,8 +43,7 @@ Preferred communication style: Simple, everyday language.
 - **File Processing**: Support for multiple document formats (PDF, DOCX, Markdown, etc.)
 
 ### Security Architecture
-- **Authentication**: OIDC-based authentication with Replit identity provider
-- **Session Management**: Secure HTTP-only cookies with PostgreSQL session storage
+- **Authentication**: Supabase Auth (JWT) with Authorization header
 - **Secrets Management**: Encrypted storage of API keys and integration credentials
 - **Multi-tenant Isolation**: Workspace-based data segregation
 
@@ -58,8 +56,8 @@ Preferred communication style: Simple, everyday language.
 ## External Dependencies
 
 ### Core Infrastructure
-- **Database**: Neon PostgreSQL serverless database
-- **Authentication**: Replit OIDC identity provider
+- **Database**: Supabase PostgreSQL (or any managed Postgres)
+- **Authentication**: Supabase Auth (JWT)
 - **File Storage**: Local file system (configurable upload directory)
 
 ### AI Services
@@ -86,6 +84,4 @@ Preferred communication style: Simple, everyday language.
 - **TanStack React Query**: Server state management
 
 ### Session and Security
-- **express-session**: Session middleware for Express
-- **connect-pg-simple**: PostgreSQL session store
-- **passport**: Authentication middleware (with OpenID Connect strategy)
+- **JWT**: Bearer tokens verified via Supabase Auth

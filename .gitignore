@@ -4,3 +4,39 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+.env
+
+# Next.js
+.next/
+out/
+.vercel/
+
+# Build artifacts
+build/
+coverage/
+*.tsbuildinfo
+.turbo/
+
+# Env variants
+.env.local
+.env.development
+.env.production
+.env.test
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor/OS
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Supabase local state
+supabase/.branches/
+supabase/.temp/
+supabase/.branches/**
+supabase/.temp/**

@@ -5,7 +5,7 @@ import { Zap, ClipboardList, GitBranch, Sparkles, ArrowRight, CheckCircle, Users
 
 export default function Landing() {
   const handleLogin = () => {
-    window.location.href = "/api/login";
+    window.location.href = "/login";
   };
 
   return (
@@ -19,7 +19,7 @@ export default function Landing() {
               <Zap className="w-8 h-8 text-white" />
             </div>
             <h1 className="text-4xl font-bold tracking-tight sm:text-6xl gradient-text">
-              BacklogGenXpert
+              ThriveIQ
             </h1>
           </div>
           
@@ -280,7 +280,7 @@ export default function Landing() {
             Ready to Transform Your Backlog?
           </h2>
           <p className="text-lg text-muted-foreground mb-8">
-            Join teams already using BacklogGenXpert to accelerate their delivery and improve work item quality.
+            Join teams already using ThriveIQ to accelerate their delivery and improve work item quality.
           </p>
           <Button size="lg" onClick={handleLogin} className="text-lg px-8 py-4" data-testid="button-cta-login">
             <Sparkles className="w-5 h-5 mr-2" />
@@ -298,7 +298,7 @@ export default function Landing() {
               <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
                 <Zap className="w-5 h-5 text-primary-foreground" />
               </div>
-              <span className="text-lg font-semibold">BacklogGenXpert</span>
+              <span className="text-lg font-semibold">ThriveIQ</span>
             </div>
             <p className="text-sm text-muted-foreground">
               © 2025 Thrivara Consulting. All rights reserved.

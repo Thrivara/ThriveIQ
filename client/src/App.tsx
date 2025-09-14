@@ -34,7 +34,7 @@ function Router() {
         <Route path="/" component={Landing} />
         <Route component={() => {
           // Redirect to login for any protected route when not authenticated
-          window.location.href = "/api/login";
+          window.location.href = "/login";
           return (
             <div className="min-h-screen w-full flex items-center justify-center bg-background">
               <div className="flex items-center space-x-2">
