@@ -26,8 +26,9 @@ export async function GET(_req: Request, { params }: { params: { projectId: stri
 
   try {
     const vf = await getVectorFileStatus(project.openai_vector_store_id, ctx.openai_file_id);
-    const rawStatus = vf?.status ?? 'in_progress';
-    const mapped = rawStatus === 'completed' ? 'ready' : rawStatus === 'failed' ? 'failed' : 'indexing';
+    const rawStatus = (vf?.status ?? 'in_progress') as string;
+    const failureStatuses = new Set(['failed', 'cancelled', 'expired']);
+    const mapped = rawStatus === 'completed' ? 'ready' : failureStatuses.has(rawStatus) ? 'failed' : 'indexing';
     const chunkCount =
       (vf as any)?.chunking_strategy?.text?.chunk_count ??
       (vf as any)?.chunking_strategy?.chunk_count ??
