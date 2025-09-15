@@ -60,6 +60,7 @@ export const projects = pgTable("projects", {
   description: text("description"),
   defaultTemplateId: uuid("default_template_id"),
   llmProviderConfig: jsonb("llm_provider_config"),
+  openaiVectorStoreId: varchar("openai_vector_store_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -97,6 +98,11 @@ export const contexts = pgTable("contexts", {
   mimeType: varchar("mime_type"),
   storagePath: varchar("storage_path"),
   metadata: jsonb("metadata"),
+  provider: varchar("provider").default('openai'),
+  openaiFileId: varchar("openai_file_id"),
+  status: varchar("status").default('uploading'),
+  chunkCount: integer("chunk_count"),
+  lastError: text("last_error"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
