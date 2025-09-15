@@ -41,8 +41,11 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
 
   try {
     // Ensure vector store
-    const vectorStoreId = await ensureVectorStore(params.projectId, project, async (updates) => {
-      await supabase.from('projects').update({ openai_vector_store_id: updates.openaiVectorStoreId }).eq('id', params.projectId);
+    const vectorStoreId = await ensureVectorStore(params.projectId, project, async (vectorStoreId) => {
+      await supabase
+        .from('projects')
+        .update({ openai_vector_store_id: vectorStoreId })
+        .eq('id', params.projectId);
     });
     // Upload and attach to vector store
     const openaiFileId = await uploadFileToVectorStore(file, vectorStoreId);

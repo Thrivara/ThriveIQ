@@ -5,11 +5,16 @@ export function getOpenAI() {
   return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 }
 
-export async function ensureVectorStore(projectId: string, project: any, updateProject: (updates: any)=> Promise<void>) {
-  if (project?.openaiVectorStoreId) return project.openaiVectorStoreId as string;
+export async function ensureVectorStore(
+  projectId: string,
+  project: any,
+  persistVectorStoreId: (vectorStoreId: string) => Promise<void>
+) {
+  const existing = project?.openai_vector_store_id ?? project?.openaiVectorStoreId;
+  if (existing) return existing as string;
   const openai = getOpenAI();
   const vs = await openai.vectorStores.create({ name: `project-${projectId}` });
-  await updateProject({ openaiVectorStoreId: vs.id });
+  await persistVectorStoreId(vs.id);
   return vs.id;
 }
 
