@@ -25,6 +25,7 @@ export async function GET(_req: Request, { params }: { params: { projectId: stri
     status: r.status,
     openaiFileId: r.openai_file_id,
     chunkCount: r.chunk_count,
+    lastError: r.last_error,
     createdAt: r.created_at,
   }));
 

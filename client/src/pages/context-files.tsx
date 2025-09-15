@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Folder, Upload, FileText, File, Trash2, MoreHorizontal, Info } from "lucide-react";
+import { Folder, Upload, FileText, File, Trash2, MoreHorizontal, Info, AlertTriangle } from "lucide-react";
 
 import { useCurrentProject } from "@/hooks/useCurrentProject";
 
@@ -21,6 +21,7 @@ interface ContextFile {
   status: ContextStatus;
   openaiFileId: string | null;
   chunkCount: number | null;
+  lastError?: string | null;
   metadata: {
     originalName?: string;
     uploadedAt?: string;
@@ -373,6 +374,12 @@ export default function ContextFiles() {
                             </>
                           )}
                         </div>
+                        {file.lastError && (
+                          <p className="flex items-center gap-2 text-xs text-destructive/80">
+                            <AlertTriangle className="w-3 h-3" />
+                            {file.lastError}
+                          </p>
+                        )}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">

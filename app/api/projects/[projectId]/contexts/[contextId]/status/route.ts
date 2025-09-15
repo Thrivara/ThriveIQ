@@ -26,9 +26,19 @@ export async function GET(_req: Request, { params }: { params: { projectId: stri
 
   try {
     const vf = await getVectorFileStatus(project.openai_vector_store_id, ctx.openai_file_id);
-    const mapped = vf?.status === 'completed' ? 'ready' : (vf?.status === 'in_progress' ? 'indexing' : (vf?.status || 'indexing'));
-    await supabase.from('contexts').update({ status: mapped }).eq('id', params.contextId);
-    return NextResponse.json({ status: mapped });
+    const rawStatus = (vf?.status ?? 'in_progress') as string;
+    const failureStatuses = new Set(['failed', 'cancelled', 'expired']);
+    const mapped = rawStatus === 'completed' ? 'ready' : failureStatuses.has(rawStatus) ? 'failed' : 'indexing';
+    const chunkCount =
+      (vf as any)?.chunking_strategy?.text?.chunk_count ??
+      (vf as any)?.chunking_strategy?.chunk_count ??
+      null;
+    const lastError = (vf as any)?.last_error?.message ?? null;
+    await supabase
+      .from('contexts')
+      .update({ status: mapped, chunk_count: chunkCount, last_error: lastError })
+      .eq('id', params.contextId);
+    return NextResponse.json({ status: mapped, chunkCount, lastError });
   } catch (e: any) {
     await supabase.from('contexts').update({ status: 'failed', last_error: e.message }).eq('id', params.contextId);
     return NextResponse.json({ status: 'failed', error: e.message });
