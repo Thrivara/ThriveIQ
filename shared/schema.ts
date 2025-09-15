@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import { relations } from 'drizzle-orm';
 import {
   index,
+  uniqueIndex,
   jsonb,
   pgTable,
   timestamp,
@@ -59,6 +60,7 @@ export const projects = pgTable("projects", {
   description: text("description"),
   defaultTemplateId: uuid("default_template_id"),
   llmProviderConfig: jsonb("llm_provider_config"),
+  openaiVectorStoreId: varchar("openai_vector_store_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -96,6 +98,11 @@ export const contexts = pgTable("contexts", {
   mimeType: varchar("mime_type"),
   storagePath: varchar("storage_path"),
   metadata: jsonb("metadata"),
+  provider: varchar("provider").default('openai'),
+  openaiFileId: varchar("openai_file_id"),
+  status: varchar("status").default('uploading'),
+  chunkCount: integer("chunk_count"),
+  lastError: text("last_error"),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -134,14 +141,20 @@ export const runItems = pgTable("run_items", {
   appliedAt: timestamp("applied_at"),
 });
 
-export const secrets = pgTable("secrets", {
-  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-  provider: varchar("provider").notNull(),
-  encryptedValue: text("encrypted_value").notNull(),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
+export const secrets = pgTable(
+  "secrets",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    provider: varchar("provider").notNull(),
+    encryptedValue: text("encrypted_value").notNull(),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("uniq_secrets_project_provider").on(table.projectId, table.provider),
+  ],
+);
 
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({

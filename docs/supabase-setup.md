@@ -12,25 +12,29 @@ This project uses Drizzle ORM with `pg` to connect to a Supabase Postgres databa
 - Set `SESSION_SECRET` to a strong random value
  - Set `SUPABASE_URL` and `SUPABASE_ANON_KEY` for auth and tools
 
-## 3) Push schema
+## 3) Generate SQL migrations (Drizzle → Supabase)
 - Ensure dependencies are installed: `npm i`
-- Push schema to Supabase: `npm run db:push`
+- Generate SQL from the Drizzle schema: `npm run db:gen`
+- Migrations are emitted to `supabase/migrations/` (configured in `drizzle.config.ts`).
 
-This uses `drizzle.config.ts` and `shared/schema.ts` to create tables.
+## 4) Push schema via Supabase CLI
+- Install and login: `brew install supabase/tap/supabase` then `supabase login`
+- Ensure project is set in `supabase/config.toml` (`project_id = "mlkhwlyhwukgkockjkty"`).
+- Push migrations to your cloud project: `supabase db push`
 
-## 4) Run locally
-- `npm run dev` (uses `tsx` to run the Express API)
-- The API reads `DATABASE_URL` and connects via SSL automatically unless `localhost`
+This applies the SQL in `supabase/migrations/` to your remote project.
 
-## 5) Next.js unified app on Vercel
+## 5) Run locally
+- `npm run dev` (Next dev)
+- The app reads `SUPABASE_URL`/`SUPABASE_ANON_KEY` for auth; DB access for API occurs server-side.
+
+## 6) Next.js unified app on Vercel
 - API is under `app/api/*` and the app root is this repo.
 - Local dev: `npm run dev` (Next dev on port 3000 by default).
 - Deploy to Vercel with this repo as the project root.
 
-## 6) Auth
-The API expects `Authorization: Bearer <access_token>` where the token is issued by Supabase Auth. The middleware validates the token via `supabase.auth.getUser(token)` and populates `req.user`.
+## 7) Auth
+Auth is handled with Supabase SSR cookies (no Authorization header required). Login at `/login`.
 
-## 7) Production hosting for API
-- Deploy the Express server to a Node host (Render, Railway, Fly.io, Supabase Functions, etc.)
-- Set `DATABASE_URL` and `SESSION_SECRET` in your host env
-- Expose the API URL for the frontend
+## 8) Production hosting
+- Deploy the Next app to Vercel (single project). Set `SUPABASE_URL` and `SUPABASE_ANON_KEY` in Vercel env.

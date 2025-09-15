@@ -1,0 +1,12 @@
+# Supabase CLI project configuration
+# Used by `supabase db push` to apply migrations in supabase/migrations to the linked project.
+
+project_id = "mlkhwlyhwukgkockjkty"
+
+[api]
+enabled = true
+
+[db]
+port = 54322
+major_version = 15
+

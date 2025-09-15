@@ -14,13 +14,21 @@ export default function LoginPage() {
 
       <div style={{ display: 'grid', gap: 12 }}>
         <button
-          onClick={() => startTransition(async () => { await signInWithProvider('google'); })}
+          onClick={() => startTransition(async () => {
+            const res = await signInWithProvider('google');
+            if (res.ok && res.url) window.location.href = res.url;
+            else setStatus(res.error || 'Failed to start Google sign-in');
+          })}
           style={{ padding: 12, borderRadius: 8, border: '1px solid #ddd', background: 'white' }}
         >
           Continue with Google
         </button>
         <button
-          onClick={() => startTransition(async () => { await signInWithProvider('azure'); })}
+          onClick={() => startTransition(async () => {
+            const res = await signInWithProvider('azure');
+            if (res.ok && res.url) window.location.href = res.url;
+            else setStatus(res.error || 'Failed to start Azure sign-in');
+          })}
           style={{ padding: 12, borderRadius: 8, border: '1px solid #ddd', background: 'white' }}
         >
           Continue with Azure AD
@@ -54,13 +62,7 @@ export default function LoginPage() {
       </form>
 
       {/* Email + Password */}
-      <form
-        action={async (formData) => {
-          setStatus('Signing in...');
-          const res = await signInWithPassword(formData);
-          if (res.ok) setStatus('Signed in. Redirecting...'); else setStatus(res.error || 'Sign in failed');
-        }}
-      >
+      <form action={signInWithPassword}>
         <input
           type="email"
           name="email"
@@ -80,22 +82,25 @@ export default function LoginPage() {
           required
         />
         <div style={{ display: 'flex', gap: 8 }}>
-          <button type="submit" style={{ flex: 1, padding: 12, borderRadius: 8, background: '#111827', color: 'white' }}>
+          <button type="submit" style={{ flex: 1, padding: 12, borderRadius: 8, background: '#111827', color: 'white' }}
+            formAction={async (formData) => {
+              const res = await signInWithPassword(formData);
+              if (res.ok) {
+                setStatus('Signed in. Redirecting...');
+                window.location.assign(res.redirectTo || '/');
+              } else setStatus(res.error || 'Sign in failed');
+            }}
+          >
             Sign in
           </button>
-          <form
-            action={async (formData) => {
-              setStatus('Creating account...');
+          <button type="submit" style={{ padding: 12, borderRadius: 8, border: '1px solid #ddd', background: 'white' }}
+            formAction={async (formData) => {
               const res = await signUpWithPassword(formData);
               if (res.ok) setStatus('Account created. Check your email to confirm.'); else setStatus(res.error || 'Sign up failed');
             }}
           >
-            <input type="hidden" name="email" value={email} />
-            <input type="hidden" name="password" value={password} />
-            <button type="submit" style={{ padding: 12, borderRadius: 8, border: '1px solid #ddd', background: 'white' }}>
-              Sign up
-            </button>
-          </form>
+            Sign up
+          </button>
         </div>
       </form>
 

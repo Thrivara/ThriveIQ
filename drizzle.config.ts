@@ -6,7 +6,8 @@ if (!process.env.DATABASE_URL) {
 }
 
 export default defineConfig({
-  out: "./migrations",
+  // Emit SQL migrations into Supabase's migrations folder so we can push with the Supabase CLI
+  out: "./supabase/migrations",
   schema: "./shared/schema.ts",
   dialect: "postgresql",
   dbCredentials: {

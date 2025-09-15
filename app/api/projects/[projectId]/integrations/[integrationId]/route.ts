@@ -14,35 +14,37 @@ function mapIntegration(row: any) {
   };
 }
 
-export async function GET(_req: Request, { params }: { params: { projectId: string } }) {
-  const supabase = createSupabaseServerClient();
-  const { data: auth } = await supabase.auth.getUser();
-  if (!auth?.user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
-
-  const { data, error } = await supabase
-    .from('integrations')
-    .select('*')
-    .eq('project_id', params.projectId)
-    .order('type', { ascending: true });
-  if (error) return NextResponse.json({ message: error.message }, { status: 500 });
-  const mapped = (data ?? []).map(mapIntegration);
-  return NextResponse.json(mapped);
-}
-
-export async function POST(req: Request, { params }: { params: { projectId: string } }) {
+export async function PATCH(req: Request, { params }: { params: { projectId: string; integrationId: string } }) {
   const supabase = createSupabaseServerClient();
   const { data: auth } = await supabase.auth.getUser();
   if (!auth?.user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
 
   const body = await req.json();
-  const { type, credentialsRef, metadata } = body || {};
-  if (!type) return NextResponse.json({ message: 'type required' }, { status: 400 });
+  const updates: any = {};
+  if (typeof body.isActive === 'boolean') updates.is_active = body.isActive;
+  if (body.metadata) updates.metadata = body.metadata;
 
   const { data, error } = await supabase
     .from('integrations')
-    .insert({ project_id: params.projectId, type, credentials_ref: credentialsRef ?? null, metadata: metadata ?? null, is_active: true })
+    .update({ ...updates, updated_at: new Date().toISOString() })
+    .eq('id', params.integrationId)
+    .eq('project_id', params.projectId)
     .select()
     .single();
   if (error) return NextResponse.json({ message: error.message }, { status: 500 });
   return NextResponse.json(mapIntegration(data));
+}
+
+export async function DELETE(_req: Request, { params }: { params: { projectId: string; integrationId: string } }) {
+  const supabase = createSupabaseServerClient();
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth?.user) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
+
+  const { error } = await supabase
+    .from('integrations')
+    .delete()
+    .eq('id', params.integrationId)
+    .eq('project_id', params.projectId);
+  if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+  return NextResponse.json({ ok: true });
 }

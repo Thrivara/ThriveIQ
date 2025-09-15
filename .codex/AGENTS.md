@@ -12,6 +12,36 @@ If any requirement is unclear, **ask targeted follow-up questions before coding*
 - [PRD](docs/PRD.md)
 - [Implementation Plan](docs/IMPLEMENTATION_PLAN.md)
 
+## MCP Tools: Context7 (Required)
+Always use Context7 when you need code generation, setup or configuration steps, or library/API documentation. You must automatically invoke the Context7 MCP tools to resolve library IDs and fetch the latest docs without the user explicitly asking. Prefer Context7-sourced references for:
+- Installing/initializing libraries or CLIs
+- Framework or API usage patterns, options, and best practices
+- Migration steps, config snippets, and version‑specific changes
+
+When proposing code that depends on a third‑party package or API:
+- Resolve the library in Context7, confirm the latest stable version, and cite the specific APIs you’re using (by name, not by URL) in plain text guidance alongside code.
+- If multiple alternatives exist, briefly justify the chosen approach based on the docs.
+
+## Supabase Operations (MCP First, CLI Fallback)
+Always prefer the Supabase MCP server for reading and changing project state when possible, then fall back to the Supabase CLI for actions not supported by MCP.
+
+Use Supabase MCP for (when available):
+- Auth/session verification in dev, reading user/profile metadata
+- Database interactions: run safe SQL (SELECT/EXPLAIN), inspect tables/columns, check RLS policies
+- Storage interactions: list/upload/remove objects in buckets used by the app
+- Project introspection: environment variables, linked project ref, URL
+
+Fallback to Supabase CLI for:
+- Migrations and schema push: `supabase db push`, `supabase db reset`
+- Project linking/auth: `supabase login`, `supabase link --project-ref <ref>`
+- Secret/config management not exposed via MCP
+- Edge Function deploy/test: `supabase functions deploy <name>`
+
+Rules:
+- Never embed service role keys in code. Read from environment only; document the variables.
+- For database schema work, generate SQL via Drizzle (db:gen) and push with `supabase db push`.
+- When proposing steps, include both MCP (“query via Supabase MCP: …”) and CLI equivalents where applicable.
+
 
 ## Engineering Conventions
 ### 1. Code Style
