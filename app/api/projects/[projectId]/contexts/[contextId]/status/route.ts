@@ -45,7 +45,7 @@ export async function GET(_req: Request, { params }: { params: { projectId: stri
   }
 
   try {
-  const vf = await getVectorFileStatus(vectorStoreId as string, fileId as string);
+    const vf = await getVectorFileStatus(vectorStoreId as string, fileId as string);
     const rawStatus = (vf?.status ?? 'in_progress') as string;
     const failureStatuses = new Set(['failed', 'cancelled', 'expired']);
     const mapped = rawStatus === 'completed' ? 'ready' : failureStatuses.has(rawStatus) ? 'failed' : 'indexing';

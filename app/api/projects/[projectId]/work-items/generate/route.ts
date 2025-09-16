@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/../lib/supabase/server';
 import OpenAI from 'openai';
 
+const STANDARD_ENGINEERING_TASKS = ['PR Review', 'Dev Testing', 'QA Handoff'];
+
 async function fetchAdoItemDetail(projectId: string, itemId: string, supabase: any) {
   const { data: integration } = await supabase
     .from('integrations')
@@ -54,6 +56,13 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
   const contextIds: string[] = body.contextIds || [];
   if (!itemIds.length) return NextResponse.json({ message: 'itemIds required' }, { status: 400 });
 
+  const { data: project } = await supabase
+    .from('projects')
+    .select('*')
+    .eq('id', params.projectId)
+    .maybeSingle();
+  if (!project) return NextResponse.json({ message: 'Project not found' }, { status: 404 });
+
   // Create run
   const { data: run, error: runErr } = await supabase
     .from('runs')
@@ -86,18 +95,25 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
     const { data: t } = await supabase.from('templates').select('*').eq('id', templateId).maybeSingle();
     template = t || null;
   }
-  let contextTexts: string[] = [];
+  let selectedContexts: any[] = [];
   if (contextIds.length) {
-    // try to join with context_chunks if present; fall back to metadata
+    const { data: ctxs } = await supabase
+      .from('contexts')
+      .select('*')
+      .in('id', contextIds);
+    selectedContexts = ctxs || [];
+  }
+
+  let contextTexts: string[] = [];
+  if (contextIds.length && (!process.env.OPENAI_API_KEY || !project.openai_vector_store_id)) {
     const { data: chunks } = await supabase
       .from('context_chunks')
       .select('*')
       .in('context_id', contextIds)
       .limit(1000);
-    if (chunks?.length) contextTexts = chunks.map((c:any)=> c.text).filter(Boolean);
-    else {
-      const { data: ctxs } = await supabase.from('contexts').select('*').in('id', contextIds);
-      contextTexts = (ctxs||[]).map((c:any)=> JSON.stringify(c.metadata||{}));
+    if (chunks?.length) contextTexts = chunks.map((c: any) => c.text).filter(Boolean);
+    else if (selectedContexts.length) {
+      contextTexts = selectedContexts.map((c: any) => JSON.stringify(c.metadata || {}));
     }
   }
 
@@ -136,29 +152,75 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
         };
         let after = before;
         if (openai) {
-          const sys = `Principal-level Agile coach and analyst who produces Azure DevOps-ready user stories or discovery SPIKEs. Output JSON only.`;
-          const input = {
-            instructions: `User Stories (Azure DevOps, plain text only)\nTemplate:\nTitle: <Story title>\nType: User Story / SPIKE / Bug\nRole-Goal-Reason\n As a <role>, I want <capability> so that <outcome>.\nAcceptance Criteria:\n <List here>\nTest Cases:\n <List Given <context>, When <action>, Then <result>\nImplementation Notes:\n- Tech stack: <List here>\n- Security controls: <List here>\n- NFRs: <List here>\n\nTasks:<List here>\n\nGaps / Ambiguities:\n- <List here>\n\nDependencies:\n- <List here>\n\nStory Point Estimate: <Fibonacci or SPIKE timebox>\nEstimate Rationale: layers affected, testing scope, complexity, risk\n\nRules\n- Acceptance criteria must not include NFRs or technical implementation details.\n- Output user stories in Azure DevOps-ready plain text (no Markdown).\n- Story-point estimates follow Fibonacci (1,2,3,5,8,13) with rationale. SPIKEs are timeboxed.\n- Keep explanations precise, concise, and professional.`,
-            template: template ? { name: template.name, body: template.body } : null,
-            context: contextTexts.slice(0, 20),
+          const sys = `Principal-level Agile coach and analyst who produces Azure DevOps-ready user stories or discovery SPIKEs.
+User Stories (Azure DevOps, plain text only)
+Template:
+Title: <Story title>
+Type: User Story / SPIKE / Bug / Task / Test Case
+Role-Goal-Reason: As a <role>, I want <capability> so that <outcome>.
+Acceptance Criteria:
+- <List here>
+
+Test Cases:
+- Given <context>, When <action>, Then <result>
+
+Implementation Notes:
+- Tech stack: <List here>
+- Security Controls: <List here>
+- NFRs: <List here>
+
+Tasks:
+- <List here>
+
+Gaps / Ambiguities:
+- <List here>
+
+Dependencies:
+- <List here>
+
+Story Point Estimate: <Fibonacci or SPIKE timebox>
+Estimate Rationale: <List here>
+
+Rules
+- Acceptance criteria must not include NFRs or technical implementation details.
+- Output user stories in Azure DevOps-ready plain text (no Markdown).
+- Story-point estimates follow Fibonacci (1,2,3,5,8,13) with rationale. SPIKEs are timeboxed.
+- Keep explanations precise, concise, and professional.
+- Always include the Role-Goal-Reason as the first line of the description.
+- Replace every '<List here>' placeholder with concrete details derived from the work item, templates, and context. Never leave placeholders in the output.
+- Always include the standard engineering tasks PR Review, Dev Testing, and QA Handoff in addition to any context-specific tasks.`;
+          const contextNames = selectedContexts
+            .map((c: any) => c.file_name || c.metadata?.originalName)
+            .filter((name: unknown): name is string => typeof name === 'string' && name.length > 0);
+          const useVectorStore = Boolean(project.openai_vector_store_id);
+          const userPayload = {
+            project: { id: params.projectId, name: project.name },
             workItemPlain: beforeText,
-            outputContract: {
-              title: 'string',
-              type: 'User Story|SPIKE|Bug|Task|Test Case',
-              descriptionText: 'string',
-              acceptanceCriteria: ['string'],
-              testCases: [{ given: 'string', when: 'string', then: 'string' }],
-              implementationNotes: ['string'],
-              tasks: ['string'],
-              gaps: ['string'],
-              dependencies: ['string'],
-              storyPoints: 'number|null',
-              estimateRationale: 'string|null',
-              tags: ['string']
-            }
+            template: template ? { name: template.name, body: template.body } : null,
+            selectedContextFiles: contextNames,
+            fallbackContext: contextTexts.slice(0, 20),
           };
-          const chat = await openai!.chat.completions.create({
+          const response = await (openai.responses.create as any)({
             model: 'gpt-4o-mini',
+            input: [
+              {
+                role: 'system',
+                content: [{ type: 'text', text: sys }],
+              },
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify({
+                      ...userPayload,
+                      instructions:
+                        'Use retrieval from the linked project vector store. If retrieval returns nothing relevant, rely on the provided work item details and template without inventing facts.',
+                    }),
+                  },
+                ],
+              },
+            ],
             response_format: {
               type: 'json_schema',
               json_schema: {
@@ -169,48 +231,101 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
                   additionalProperties: false,
                   properties: {
                     title: { type: 'string' },
-                    type: { type: 'string', enum: ['User Story','SPIKE','Bug','Task','Test Case'] },
-                    roleGoalReason: { type: ['string','null'] },
+                    type: { type: 'string', enum: ['User Story', 'SPIKE', 'Bug', 'Task', 'Test Case'] },
+                    roleGoalReason: { type: ['string', 'null'] },
                     descriptionText: { type: 'string' },
                     acceptanceCriteria: { type: 'array', items: { type: 'string' } },
-                    testCases: { type: 'array', items: { type: 'object', properties: { given: {type:'string'}, when: {type:'string'}, then: {type:'string'} }, required: ['given','when','then'], additionalProperties: false } },
+                    testCases: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        additionalProperties: false,
+                        properties: {
+                          given: { type: 'string' },
+                          when: { type: 'string' },
+                          then: { type: 'string' },
+                        },
+                        required: ['given', 'when', 'then'],
+                      },
+                    },
                     implementationNotes: { type: 'array', items: { type: 'string' } },
                     tasks: { type: 'array', items: { type: 'string' } },
                     gaps: { type: 'array', items: { type: 'string' } },
                     dependencies: { type: 'array', items: { type: 'string' } },
-                    storyPoints: { type: ['number','null'] },
-                    estimateRationale: { type: ['string','null'] },
+                    storyPoints: { type: ['number', 'null'] },
+                    estimateRationale: { type: ['string', 'null'] },
                     tags: { type: 'array', items: { type: 'string' } },
                   },
-                  required: ['title','type','roleGoalReason','descriptionText','acceptanceCriteria','testCases','implementationNotes','tasks','gaps','dependencies','storyPoints','estimateRationale','tags']
-                }
-              }
-            } as any,
-            messages: [
-              { role: 'system', content: sys },
-              { role: 'user', content: JSON.stringify(input) },
-            ],
+                  required: [
+                    'title',
+                    'type',
+                    'roleGoalReason',
+                    'descriptionText',
+                    'acceptanceCriteria',
+                    'testCases',
+                    'implementationNotes',
+                    'tasks',
+                    'gaps',
+                    'dependencies',
+                    'storyPoints',
+                    'estimateRationale',
+                    'tags',
+                  ],
+                },
+              },
+            },
+            tools: useVectorStore ? [{ type: 'file_search' }] : undefined,
+            tool_resources: useVectorStore
+              ? { file_search: { vector_store_ids: [project.openai_vector_store_id] } }
+              : undefined,
             temperature: 0.3,
-          } as any);
-          const outText = (chat.choices?.[0]?.message?.content || '').toString();
+          });
+          const outText = (response?.output_text || extractText(response) || '').toString();
           let json: any = {};
-          try { json = JSON.parse(outText); } catch { json = {}; }
-          // Build HTML from plain text
-          let roleGoalReason = json.roleGoalReason;
+          try {
+            json = JSON.parse(outText);
+          } catch {
+            json = {};
+          }
+          let roleGoalReason = json.roleGoalReason as string | null | undefined;
           if (!roleGoalReason && typeof json.descriptionText === 'string') {
             const firstLine = json.descriptionText.split(/\n+/)[0] || '';
             if (/^As a /i.test(firstLine)) roleGoalReason = firstLine.trim();
           }
           const rgr = roleGoalReason ? `<p><strong>Role-Goal-Reason:</strong> ${roleGoalReason}</p>` : '';
-          const mainDesc = json.descriptionText ? `<p>${json.descriptionText.replace(/\n+/g,'</p><p>')}</p>` : '';
-          const impl = json.implementationNotes && json.implementationNotes.length ? `<h3>Implementation Notes</h3>${bulletsToHtml(json.implementationNotes)}` : '';
-          const estimate = (json.storyPoints!=null || json.estimateRationale) ? `<h3>Estimate</h3>${json.storyPoints!=null?`<p><strong>Story Points:</strong> ${json.storyPoints}</p>`:''}${json.estimateRationale?`<p>${json.estimateRationale}</p>`:''}` : '';
-          const gaps = json.gaps && json.gaps.length ? `<h3>Gaps / Ambiguities</h3>${bulletsToHtml(json.gaps)}` : '';
-          const deps = json.dependencies && json.dependencies.length ? `<h3>Dependencies</h3>${bulletsToHtml(json.dependencies)}` : '';
-          const descHtml = (rgr + mainDesc + impl + estimate + gaps + deps) || before.descriptionHtml || '';
-          // Acceptance Criteria field should contain both AC and Test Cases, without headings
-          const acHtml = (json.acceptanceCriteria && json.acceptanceCriteria.length ? `${bulletsToHtml(json.acceptanceCriteria)}` : '')
-            + (json.testCases && json.testCases.length ? `${testCasesToHtml(json.testCases)}` : '');
+          let descriptionText = typeof json.descriptionText === 'string' ? json.descriptionText : '';
+          if (roleGoalReason && descriptionText) {
+            const lines = descriptionText.split(/\n+/);
+            const first = lines[0]?.trim();
+            if (first && first.toLowerCase().includes((roleGoalReason as string).toLowerCase())) {
+              lines.shift();
+              descriptionText = lines.join('\n').trim();
+            }
+          }
+          const mainDesc = descriptionText ? `<p>${descriptionText.replace(/\n+/g, '</p><p>')}</p>` : '';
+          const impl = json.implementationNotes && json.implementationNotes.length
+            ? `<h3>Implementation Notes</h3>${bulletsToHtml(json.implementationNotes)}`
+            : '';
+          const estimate =
+            json.storyPoints != null || json.estimateRationale
+              ? `<h3>Estimate</h3>${
+                  json.storyPoints != null ? `<p><strong>Story Points:</strong> ${json.storyPoints}</p>` : ''
+                }${json.estimateRationale ? `<p>${json.estimateRationale}</p>` : ''}`
+              : '';
+          const gapsHtml = json.gaps && json.gaps.length ? `<h3>Gaps / Ambiguities</h3>${bulletsToHtml(json.gaps)}` : '';
+          const depsHtml = json.dependencies && json.dependencies.length ? `<h3>Dependencies</h3>${bulletsToHtml(json.dependencies)}` : '';
+          const descHtml = (rgr + mainDesc + impl + estimate + gapsHtml + depsHtml) || before.descriptionHtml || '';
+          const acHtml =
+            (json.acceptanceCriteria && json.acceptanceCriteria.length ? `${bulletsToHtml(json.acceptanceCriteria)}` : '') +
+            (json.testCases && json.testCases.length ? `${testCasesToHtml(json.testCases)}` : '');
+
+          const rawTasks = Array.isArray(json.tasks) ? json.tasks.filter((t: unknown): t is string => typeof t === 'string' && t.trim().length > 0) : [];
+          const mergedTasks = [...rawTasks];
+          for (const t of STANDARD_ENGINEERING_TASKS) {
+            if (!mergedTasks.some((existing) => existing.toLowerCase() === t.toLowerCase())) {
+              mergedTasks.push(t);
+            }
+          }
 
           after = {
             ...before,
@@ -219,18 +334,18 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
             acceptanceCriteriaHtml: acHtml,
             enhanced: {
               type: json.type || null,
-              roleGoalReason: json.roleGoalReason || null,
+              roleGoalReason: roleGoalReason || null,
               descriptionText: json.descriptionText || null,
               acceptanceCriteria: json.acceptanceCriteria || [],
               testCases: json.testCases || [],
-              tasks: json.tasks || [],
+              tasks: mergedTasks,
               implementationNotes: json.implementationNotes || [],
               gaps: json.gaps || [],
               dependencies: json.dependencies || [],
               storyPoints: json.storyPoints ?? null,
               estimateRationale: json.estimateRationale ?? null,
-              tags: (json.tags || []).concat(['AIEnhanced']).filter(Boolean)
-            }
+              tags: (json.tags || []).concat(['AIEnhanced']).filter(Boolean),
+            },
           };
         } else {
           after = {
