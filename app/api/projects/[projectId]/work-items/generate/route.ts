@@ -65,7 +65,44 @@ const TEXT_FORMAT = {
   strict: true,
   schema: WORK_ITEM_SCHEMA,
 } as const;
-// --- End helpers & schema ---
+
+// --- OpenAI call retry helpers ---
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> => {
+  return new Promise((resolve, reject) => {
+    const to = setTimeout(() => reject(new Error(`Timeout after ${ms}ms`)), ms);
+    p.then((v) => { clearTimeout(to); resolve(v); }, (e) => { clearTimeout(to); reject(e); });
+  });
+};
+type OAICall<T> = () => Promise<T>;
+async function callWithRetry<T>(fn: OAICall<T>, label: string, maxRetries = 3): Promise<T> {
+  let attempt = 0;
+  let lastErr: any;
+  while (attempt <= maxRetries) {
+    try {
+      // 45s default timeout per call to avoid hanging
+      return await withTimeout(fn(), 45_000);
+    } catch (err: any) {
+      lastErr = err;
+      const status = err?.status ?? err?.response?.status;
+      const retryAfterHeader = err?.headers?.get?.('retry-after') || err?.response?.headers?.get?.('retry-after');
+      const retryAfter = retryAfterHeader ? parseInt(retryAfterHeader, 10) * 1000 : undefined;
+      const isRetriable =
+        status === 408 || status === 409 || status === 425 ||
+        status === 429 || (status >= 500 && status <= 599) ||
+        (err?.message && /Timeout/i.test(err.message));
+      if (!isRetriable || attempt === maxRetries) break;
+      const base = 500 * Math.pow(2, attempt);
+      const jitter = Math.floor(Math.random() * 250);
+      const delay = retryAfter ?? (base + jitter);
+      console.warn(`[OpenAI:${label}] attempt ${attempt + 1} failed (status=${status}); retrying in ${delay}ms`);
+      await sleep(delay);
+      attempt++;
+    }
+  }
+  throw lastErr;
+}
+// --- End retry helpers ---
 
 async function fetchAdoItemDetail(projectId: string, itemId: string, supabase: any) {
   const { data: integration } = await supabase
@@ -286,13 +323,92 @@ Rules
 
           // ---------- Phase 1: Retrieval-only micro call (one search, then stop) ----------
           let retrievedSnippets: string[] = [];
+          let retrievalSummary: string = '';
           if (useVectorStore) {
-            const retrieval = await (openai.responses.create as any)({
+            try {
+              const retrieval = await callWithRetry(
+                () => (openai.responses.create as any)({
+                  model: 'gpt-4o-mini',
+                  input: [
+                    {
+                      role: 'system',
+                      content: [{ type: 'input_text', text: 'You will perform a single file_search and then stop. Do not generate a story.' }],
+                    },
+                    {
+                      role: 'user',
+                      content: [
+                        {
+                          type: 'input_text',
+                          text:
+                            `Search the project vector store for material that helps generate a high-quality user story.\n` +
+                            `Query: ${clip(beforeText.title || '', 200)}\n` +
+                            `Context hint: ${clip(beforeText.descriptionText || '', 300)}\n` +
+                            `Return control without generating text.`,
+                        },
+                      ],
+                    },
+                  ],
+                  tools: [
+                    {
+                      type: 'file_search',
+                      vector_store_ids: [project.openai_vector_store_id],
+                      max_num_results: 8,
+                      ranking_options: { ranker: 'auto', score_threshold: 0.2 },
+                    },
+                  ],
+                  parallel_tool_calls: false,
+                  max_tool_calls: 1,
+                  include: ['file_search_call.results'],
+                  max_output_tokens: 1200,
+                  temperature: 0.0,
+                }),
+                'retrieval',
+                1
+              );
+              console.log('Retrieval response', JSON.stringify(retrieval, null, 2));
+              // --- Capture any model-produced summary text
+              retrievalSummary = clip(extractText(retrieval), 2000); // capture any model-produced summary text
+              if (retrievalSummary && retrievalSummary.trim().length) {
+                console.log('Retrieval summary (clipped)', retrievalSummary);
+              }
+              const results =
+                (retrieval.output || [])
+                  .filter((n: any) => n?.type === 'file_search_call')
+                  .flatMap((n: any) => n?.results || []) || [];
+              retrievedSnippets = results.slice(0, 8).map((r: any) => clip(r?.text || '', 1200));
+              // Prepend the summary to snippets (so it’s first)
+              if (retrievalSummary && retrievalSummary.trim().length) {
+                retrievedSnippets.unshift(`[RETRIEVAL SUMMARY]\n${retrievalSummary}`);
+              }
+              console.log('Retrieved snippets', retrievedSnippets);
+              // Update: log summary presence/length
+              console.log('Retrieval summary', {
+                hits: results.length,
+                used: retrievedSnippets.length,
+                hasSummary: Boolean(retrievalSummary && retrievalSummary.trim().length),
+                summaryChars: (retrievalSummary || '').length,
+                totalChars: retrievedSnippets.reduce((a, b) => a + b.length, 0),
+              });
+            } catch (reErr: any) {
+              const reqId =
+                reErr?.headers?.get?.('x-request-id') ||
+                reErr?.response?.headers?.get?.('x-request-id') ||
+                reErr?.request_id ||
+                reErr?.requestId ||
+                null;
+              console.warn('[Retrieval] failed; continuing without snippets', { status: reErr?.status ?? reErr?.response?.status, request_id: reqId, message: reErr?.message });
+              // continue with empty retrievedSnippets
+            }
+          }
+
+          // ---------- Phase 2: Generation-only (no tools) ----------
+          const response = await callWithRetry(
+            () => (openai.responses.create as any)({
               model: 'gpt-4o-mini',
               input: [
                 {
                   role: 'system',
-                  content: [{ type: 'input_text', text: 'You will perform a single file_search and then stop. Do not generate a story.' }],
+                  content: [{ type: 'input_text', text: sys }],
                 },
                 {
                   role: 'user',
@@ -300,75 +416,27 @@ Rules
                     {
                       type: 'input_text',
                       text:
-                        `Search the project vector store for material that helps generate a high-quality user story.\n` +
-                        `Query: ${clip(beforeText.title || '', 200)}\n` +
-                        `Context hint: ${clip(beforeText.descriptionText || '', 300)}\n` +
-                        `Return control without generating text.`,
+                        `You are enhancing an Azure DevOps work item into a complete, ADO-ready user story.\n` +
+                        `Use the retrievedSummary first (if present) and retrievedContext as supporting evidence. If retrieval returns nothing, rely on inputs; do not invent facts.\n\n` +
+                        JSON.stringify({
+                          ...userPayload,
+                          retrievedSummary: (retrievedSnippets.length && retrievedSnippets[0].startsWith('[RETRIEVAL SUMMARY]')) ? retrievedSnippets[0].slice('[RETRIEVAL SUMMARY]'.length + 1) : '',
+                          retrievedContext: retrievedSnippets,
+                          instructions:
+                            'Use retrievedSummary first (if present) and retrievedContext as supporting evidence. If retrieval returns nothing, rely on inputs; do not invent facts.',
+                        }),
                     },
                   ],
                 },
               ],
-              tools: [
-                {
-                  type: 'file_search',
-                  vector_store_ids: [project.openai_vector_store_id],
-                  max_num_results: 8,
-                  ranking_options: { ranker: 'auto', score_threshold: 0.2 },
-                },
-              ],
-              parallel_tool_calls: false,
-              max_tool_calls: 1,
-              include: ['file_search_call.results'],
-              max_output_tokens: 16, // minimum allowed; still discourages long text
-              temperature: 0.0,
-            });
-
-            console.log('Retrieval response', JSON.stringify(retrieval, null, 2));
-
-            const results =
-              (retrieval.output || [])
-                .filter((n: any) => n?.type === 'file_search_call')
-                .flatMap((n: any) => n?.results || []) || [];
-
-            retrievedSnippets = results.slice(0, 8).map((r: any) => clip(r?.text || '', 1200));
-            console.log('Retrieval summary', {
-              hits: results.length,
-              used: retrievedSnippets.length,
-              totalChars: retrievedSnippets.reduce((a, b) => a + b.length, 0),
-            });
-          }
-
-          // ---------- Phase 2: Generation-only (no tools) ----------
-          const response = await (openai.responses.create as any)({
-            model: 'gpt-4o-mini',
-            input: [
-              {
-                role: 'system',
-                content: [{ type: 'input_text', text: sys }],
-              },
-              {
-                role: 'user',
-                content: [
-                  {
-                    type: 'input_text',
-                    text:
-                      `You are enhancing an Azure DevOps work item into a complete, ADO-ready user story.\n` +
-                      `Use the retrievedContext (if any) as extra knowledge, but ALWAYS produce the final JSON according to schema even if retrievedContext is empty.\n\n` +
-                      JSON.stringify({
-                        ...userPayload,
-                        retrievedContext: retrievedSnippets,
-                        instructions:
-                          'Use retrievedContext (if present) and the provided work item/template. If retrieval returns nothing, rely on inputs; do not invent facts.',
-                      }),
-                  },
-                ],
-              },
-            ],
-            text: { format: TEXT_FORMAT },
-            tool_choice: 'none', // deterministic: no tools in generation phase
-            max_output_tokens: 1200,
-            temperature: 0.3,
-          });
+              text: { format: TEXT_FORMAT },
+              tool_choice: 'none',
+              max_output_tokens: 1200,
+              temperature: 0.3,
+            }),
+            'generation',
+            3
+          );
           console.log('OpenAI generation response', JSON.stringify(response, null, 2));
 
           // Prefer structured outputs (.parsed) from the Phase 2 response
@@ -473,7 +541,13 @@ Rules
           .update({ status: 'generated', after_json: after })
           .eq('id', it.id);
       } catch (err: any) {
-        const errorPayload = { error: err?.message || String(err) };
+        const reqId =
+          err?.headers?.get?.('x-request-id') ||
+          err?.response?.headers?.get?.('x-request-id') ||
+          err?.request_id ||
+          err?.requestId ||
+          null;
+        const errorPayload = { error: err?.message || String(err), request_id: reqId, status: err?.status ?? err?.response?.status ?? null };
         await supabase.from('run_items').update({ status: 'rejected', after_json: errorPayload }).eq('id', it.id);
       }
     }
