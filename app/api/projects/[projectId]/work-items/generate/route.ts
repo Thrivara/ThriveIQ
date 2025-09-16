@@ -1,8 +1,71 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/../lib/supabase/server';
 import OpenAI from 'openai';
+import { strict } from 'assert';
+
 
 const STANDARD_ENGINEERING_TASKS = ['PR Review', 'Dev Testing', 'QA Handoff'];
+
+// --- Reusable helpers & shared schema (DRY) ---
+const clip = (s: unknown, max: number): string =>
+  (typeof s === 'string' ? s : (s == null ? '' : String(s))).slice(0, Math.max(0, max));
+const approxTokens = (s: string) => Math.ceil(s.length / 4); // rough heuristic
+
+// JSON Schema used for structured outputs, reused across calls
+const WORK_ITEM_SCHEMA: any = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    title: { type: 'string' },
+    type: { type: 'string', enum: ['User Story', 'SPIKE', 'Bug', 'Task', 'Test Case'] },
+    roleGoalReason: { type: ['string', 'null'] },
+    descriptionText: { type: 'string' },
+    acceptanceCriteria: { type: 'array', items: { type: 'string' } },
+    testCases: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          given: { type: 'string' },
+          when: { type: 'string' },
+          then: { type: 'string' },
+        },
+        required: ['given', 'when', 'then'],
+      },
+    },
+    implementationNotes: { type: 'array', items: { type: 'string' } },
+    tasks: { type: 'array', items: { type: 'string' } },
+    gaps: { type: 'array', items: { type: 'string' } },
+    dependencies: { type: 'array', items: { type: 'string' } },
+    storyPoints: { type: ['number', 'null'] },
+    estimateRationale: { type: ['string', 'null'] },
+    tags: { type: 'array', items: { type: 'string' } },
+  },
+  required: [
+    'title',
+    'type',
+    'roleGoalReason',
+    'descriptionText',
+    'acceptanceCriteria',
+    'testCases',
+    'implementationNotes',
+    'tasks',
+    'gaps',
+    'dependencies',
+    'storyPoints',
+    'estimateRationale',
+    'tags',
+  ],
+};
+
+const TEXT_FORMAT = {
+  type: 'json_schema',
+  name: 'WorkItemEnhancement',
+  strict: true,
+  schema: WORK_ITEM_SCHEMA,
+} as const;
+// --- End helpers & schema ---
 
 async function fetchAdoItemDetail(projectId: string, itemId: string, supabase: any) {
   const { data: integration } = await supabase
@@ -146,9 +209,9 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
       try {
         const before = it.before_json || {};
         const beforeText = {
-          title: before.title || '',
-          descriptionText: stripHtml(before.descriptionHtml),
-          acceptanceCriteriaText: stripHtml(before.acceptanceCriteriaHtml),
+          title: clip(before.title || '', 200),
+          descriptionText: clip(stripHtml(before.descriptionHtml), 4000),
+          acceptanceCriteriaText: clip(stripHtml(before.acceptanceCriteriaHtml), 2000),
         };
         let after = before;
         if (openai) {
@@ -189,104 +252,155 @@ Rules
 - Always include the Role-Goal-Reason as the first line of the description.
 - Replace every '<List here>' placeholder with concrete details derived from the work item, templates, and context. Never leave placeholders in the output.
 - Always include the standard engineering tasks PR Review, Dev Testing, and QA Handoff in addition to any context-specific tasks.`;
+
+          const useVectorStore = Boolean(project.openai_vector_store_id);
+
           const contextNames = selectedContexts
             .map((c: any) => c.file_name || c.metadata?.originalName)
             .filter((name: unknown): name is string => typeof name === 'string' && name.length > 0);
-          const useVectorStore = Boolean(project.openai_vector_store_id);
+
+          // Enforce empty fallbackContext when using vector store
+          let fallbackContext: string[] = [];
+          if (!useVectorStore) {
+            const raw = contextTexts.slice(0, 10);
+            fallbackContext = raw.map((t) => clip(t, 1500));
+          }
+
           const userPayload = {
             project: { id: params.projectId, name: project.name },
             workItemPlain: beforeText,
-            template: template ? { name: template.name, body: template.body } : null,
-            selectedContextFiles: contextNames,
-            fallbackContext: contextTexts.slice(0, 20),
+            template: template ? { name: clip(template.name, 120), body: clip(template.body, 3500) } : null,
+            selectedContextFiles: contextNames.slice(0, 10).map((n) => clip(n, 200)),
+            fallbackContext,
           };
+
+          console.log('Prompt size debug', {
+            titleChars: beforeText.title.length,
+            descChars: beforeText.descriptionText.length,
+            acChars: beforeText.acceptanceCriteriaText.length,
+            tmplChars: template ? (template.body || '').length : 0,
+            fallbackChunks: userPayload.fallbackContext.length,
+            fallbackTotalChars: userPayload.fallbackContext.reduce((a, b) => a + b.length, 0),
+            approxPromptTokens: approxTokens(JSON.stringify({ sys, userPayload })),
+          });
+
+          // ---------- Phase 1: Retrieval-only micro call (one search, then stop) ----------
+          let retrievedSnippets: string[] = [];
+          if (useVectorStore) {
+            const retrieval = await (openai.responses.create as any)({
+              model: 'gpt-4o-mini',
+              input: [
+                {
+                  role: 'system',
+                  content: [{ type: 'input_text', text: 'You will perform a single file_search and then stop. Do not generate a story.' }],
+                },
+                {
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'input_text',
+                      text:
+                        `Search the project vector store for material that helps generate a high-quality user story.\n` +
+                        `Query: ${clip(beforeText.title || '', 200)}\n` +
+                        `Context hint: ${clip(beforeText.descriptionText || '', 300)}\n` +
+                        `Return control without generating text.`,
+                    },
+                  ],
+                },
+              ],
+              tools: [
+                {
+                  type: 'file_search',
+                  vector_store_ids: [project.openai_vector_store_id],
+                  max_num_results: 8,
+                  ranking_options: { ranker: 'auto', score_threshold: 0.2 },
+                },
+              ],
+              parallel_tool_calls: false,
+              max_tool_calls: 1,
+              include: ['file_search_call.results'],
+              max_output_tokens: 16, // minimum allowed; still discourages long text
+              temperature: 0.0,
+            });
+
+            console.log('Retrieval response', JSON.stringify(retrieval, null, 2));
+
+            const results =
+              (retrieval.output || [])
+                .filter((n: any) => n?.type === 'file_search_call')
+                .flatMap((n: any) => n?.results || []) || [];
+
+            retrievedSnippets = results.slice(0, 8).map((r: any) => clip(r?.text || '', 1200));
+            console.log('Retrieval summary', {
+              hits: results.length,
+              used: retrievedSnippets.length,
+              totalChars: retrievedSnippets.reduce((a, b) => a + b.length, 0),
+            });
+          }
+
+          // ---------- Phase 2: Generation-only (no tools) ----------
           const response = await (openai.responses.create as any)({
             model: 'gpt-4o-mini',
             input: [
               {
                 role: 'system',
-                content: [{ type: 'text', text: sys }],
+                content: [{ type: 'input_text', text: sys }],
               },
               {
                 role: 'user',
                 content: [
                   {
-                    type: 'text',
-                    text: JSON.stringify({
-                      ...userPayload,
-                      instructions:
-                        'Use retrieval from the linked project vector store. If retrieval returns nothing relevant, rely on the provided work item details and template without inventing facts.',
-                    }),
+                    type: 'input_text',
+                    text:
+                      `You are enhancing an Azure DevOps work item into a complete, ADO-ready user story.\n` +
+                      `Use the retrievedContext (if any) as extra knowledge, but ALWAYS produce the final JSON according to schema even if retrievedContext is empty.\n\n` +
+                      JSON.stringify({
+                        ...userPayload,
+                        retrievedContext: retrievedSnippets,
+                        instructions:
+                          'Use retrievedContext (if present) and the provided work item/template. If retrieval returns nothing, rely on inputs; do not invent facts.',
+                      }),
                   },
                 ],
               },
             ],
-            response_format: {
-              type: 'json_schema',
-              json_schema: {
-                name: 'WorkItemEnhancement',
-                strict: true,
-                schema: {
-                  type: 'object',
-                  additionalProperties: false,
-                  properties: {
-                    title: { type: 'string' },
-                    type: { type: 'string', enum: ['User Story', 'SPIKE', 'Bug', 'Task', 'Test Case'] },
-                    roleGoalReason: { type: ['string', 'null'] },
-                    descriptionText: { type: 'string' },
-                    acceptanceCriteria: { type: 'array', items: { type: 'string' } },
-                    testCases: {
-                      type: 'array',
-                      items: {
-                        type: 'object',
-                        additionalProperties: false,
-                        properties: {
-                          given: { type: 'string' },
-                          when: { type: 'string' },
-                          then: { type: 'string' },
-                        },
-                        required: ['given', 'when', 'then'],
-                      },
-                    },
-                    implementationNotes: { type: 'array', items: { type: 'string' } },
-                    tasks: { type: 'array', items: { type: 'string' } },
-                    gaps: { type: 'array', items: { type: 'string' } },
-                    dependencies: { type: 'array', items: { type: 'string' } },
-                    storyPoints: { type: ['number', 'null'] },
-                    estimateRationale: { type: ['string', 'null'] },
-                    tags: { type: 'array', items: { type: 'string' } },
-                  },
-                  required: [
-                    'title',
-                    'type',
-                    'roleGoalReason',
-                    'descriptionText',
-                    'acceptanceCriteria',
-                    'testCases',
-                    'implementationNotes',
-                    'tasks',
-                    'gaps',
-                    'dependencies',
-                    'storyPoints',
-                    'estimateRationale',
-                    'tags',
-                  ],
-                },
-              },
-            },
-            tools: useVectorStore ? [{ type: 'file_search' }] : undefined,
-            tool_resources: useVectorStore
-              ? { file_search: { vector_store_ids: [project.openai_vector_store_id] } }
-              : undefined,
+            text: { format: TEXT_FORMAT },
+            tool_choice: 'none', // deterministic: no tools in generation phase
+            max_output_tokens: 1200,
             temperature: 0.3,
           });
-          const outText = (response?.output_text || extractText(response) || '').toString();
-          let json: any = {};
-          try {
-            json = JSON.parse(outText);
-          } catch {
-            json = {};
+          console.log('OpenAI generation response', JSON.stringify(response, null, 2));
+
+          // Prefer structured outputs (.parsed) from the Phase 2 response
+          function extractParsed(r: any): any | null {
+            try {
+              const outputs = r?.output || [];
+              for (const node of outputs) {
+                if (node?.type === 'message') {
+                  const parts = node?.content || [];
+                  for (const p of parts) {
+                    if (p?.parsed) return p.parsed;
+                  }
+                }
+              }
+            } catch {}
+            return null;
           }
+          let parsed = extractParsed(response) || null;
+
+          // Also try output_text as a final fallback
+          if (!parsed) {
+            const txt = (response?.output_text || extractText(response) || '').toString();
+            try { parsed = JSON.parse(txt); } catch { parsed = null; }
+          }
+
+          if (!parsed || typeof parsed !== 'object') {
+            throw new Error('Model returned no structured output.');
+          }
+
+          let json: any = parsed;
+
+          // --- The rest of your transformation to ADO fields (unchanged below this line) ---
           let roleGoalReason = json.roleGoalReason as string | null | undefined;
           if (!roleGoalReason && typeof json.descriptionText === 'string') {
             const firstLine = json.descriptionText.split(/\n+/)[0] || '';
