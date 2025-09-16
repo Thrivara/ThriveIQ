@@ -29,6 +29,10 @@ export async function uploadFileToVectorStore(file: File, vectorStoreId: string)
 
 export async function getVectorFileStatus(vectorStoreId: string, fileId: string) {
   const openai = getOpenAI();
-  const vf = await openai.vectorStores.files.retrieve(vectorStoreId, fileId);
+  // Defensive validation: ensure we don't pass undefined or malformed ids to the SDK which build invalid paths.
+  if (!vectorStoreId || !fileId) throw new Error('vectorStoreId and fileId are required');
+  if (typeof vectorStoreId !== 'string' || typeof fileId !== 'string') throw new Error('vectorStoreId and fileId must be strings');
+  // Cast to any because the SDK types for vectorStores.files.retrieve are not aligning with our usage here.
+  const vf = await (openai.vectorStores.files.retrieve as any)(fileId, { vector_store_id:vectorStoreId});
   return vf;
 }
