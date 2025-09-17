@@ -15,6 +15,13 @@
       "when": 1757968118888,
       "tag": "0001_married_ikaris",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1758072921264,
+      "tag": "0002_add_guardrails_to_projects",
+      "breakpoints": true
     }
   ]
 }

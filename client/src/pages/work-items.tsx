@@ -16,6 +16,35 @@ import { useMutation } from "@tanstack/react-query";
 import { ClipboardList, ExternalLink, Sparkles, Loader2 } from "lucide-react";
 import { useState, useMemo } from "react";
 
+interface ApplyOptions {
+  selectedFields: string[];
+  createTasks: boolean;
+  createTestCases: boolean;
+  setStoryPoints: boolean;
+}
+
+interface ApplyResult {
+  itemId: string;
+  success: boolean;
+  error?: string;
+}
+
+interface ApplyResponse {
+  results: ApplyResult[];
+}
+
+interface ProjectContext {
+  id: string;
+  fileName?: string | null;
+  status?: string | null;
+}
+
+interface RunItem {
+  id: string;
+  source_item_id: string;
+  [key: string]: unknown;
+}
+
 export default function WorkItems() {
   const { toast } = useToast();
   const { isAuthenticated, isLoading } = useAuth();
@@ -291,7 +320,7 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
       return res.json();
     }
   });
-  const contextsQ = useQuery<any[]>({
+  const contextsQ = useQuery<ProjectContext[]>({
     queryKey: ['/api/projects', projectId, 'contexts'],
     queryFn: async () => {
       const res = await fetch(`/api/projects/${projectId}/contexts`);
@@ -313,6 +342,11 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
   useEffect(() => {
     localStorage.setItem('thriveiq.debugJson', debugJson ? '1' : '0');
   }, [debugJson]);
+
+  const availableContexts = (contextsQ.data ?? []).filter((context) => context.status !== 'deleted');
+  const { toast: pushToast } = useToast();
+  const workItemLink = typeof data?.link === 'string' ? data.link : undefined;
+  const workItemLabel = data?.title ? `Work Item #${id} – ${data.title}` : `Work Item #${id}`;
 
   const generateMutation = useMutation({
     mutationFn: async () => {
@@ -336,7 +370,7 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
       return res.json();
     }
   });
-  const runItemsQ = useQuery<any[]>({
+  const runItemsQ = useQuery<RunItem[]>({
     queryKey: runId ? ['/api/runs', runId, 'items'] : ['disabled'],
     enabled: !!runId,
     refetchInterval: (q) => (runQ.data && runQ.data.status !== 'completed' && runQ.data.status !== 'failed') ? 2000 : false,
@@ -354,16 +388,59 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
     }
   }, [runQ.data?.status]);
 
-  const applyMutation = useMutation({
-    mutationFn: async (opts: any) => {
-      const items = (runItemsQ.data || []).filter((ri)=> ri.source_item_id === String(id));
+  const applyMutation = useMutation<ApplyResponse, Error, ApplyOptions>({
+    mutationFn: async (opts) => {
+      if (!runId) throw new Error('No AI run is available to apply.');
+      const items = (runItemsQ.data ?? []).filter((runItem) => runItem.source_item_id === String(id));
       const res = await fetch(`/api/runs/${runId}/apply`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ selectedItemIds: items.map((i:any)=> i.id), ...opts })
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          selectedItemIds: items.map((item) => item.id),
+          ...opts,
+        }),
       });
       if (!res.ok) throw new Error(await res.text());
       return res.json();
-    }
+    },
+    onSuccess: (result) => {
+      const successes = result.results.filter((entry) => entry.success);
+      const failures = result.results.filter((entry) => !entry.success);
+
+      if (successes.length > 0) {
+        pushToast({
+          title: successes.length > 1 ? 'Changes applied to work items' : `Changes applied to ${workItemLabel}`,
+          description: workItemLink ? (
+            <a href={workItemLink} target="_blank" rel="noreferrer" className="text-primary underline">
+              Open work item
+            </a>
+          ) : (
+            'Azure DevOps accepted the update.'
+          ),
+        });
+      }
+
+      if (successes.length === 0 && failures.length > 0) {
+        pushToast({
+          title: 'Azure DevOps rejected the update',
+          description: failures[0]?.error ?? 'No changes were applied.',
+          variant: 'destructive',
+        });
+      }
+    },
+    onError: (err) => {
+      pushToast({
+        title: 'Failed to apply changes',
+        description: err.message,
+        variant: 'destructive',
+      });
+    },
+    onSettled: () => {
+      if (runId) {
+        runItemsQ.refetch();
+        runQ.refetch();
+      }
+    },
   });
 
   if (isLoading) return <div className="py-6 text-sm">Loading…</div>;
@@ -401,8 +478,19 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
             <div>
               <div className="text-sm font-medium mb-1">Contexts</div>
               <div className="flex flex-wrap gap-2 max-h-24 overflow-auto border rounded p-2">
-                {(contextsQ.data||[]).map((c:any)=> (
-                  <Badge key={c.id} variant={selectedContexts.includes(c.id)? 'default':'secondary'} className="cursor-pointer" onClick={()=> setSelectedContexts((prev)=> prev.includes(c.id)? prev.filter(x=>x!==c.id): [...prev, c.id])}>{c.fileName || c.id}</Badge>
+                {availableContexts.map((context) => (
+                  <Badge
+                    key={context.id}
+                    variant={selectedContexts.includes(context.id) ? 'default' : 'secondary'}
+                    className="cursor-pointer"
+                    onClick={() =>
+                      setSelectedContexts((prev) =>
+                        prev.includes(context.id) ? prev.filter((value) => value !== context.id) : [...prev, context.id],
+                      )
+                    }
+                  >
+                    {context.fileName || context.id}
+                  </Badge>
                 ))}
               </div>
             </div>
@@ -566,7 +654,7 @@ function typeBadgeClass(type?: string) {
   return '';
 }
 
-function ApplyControls({ onApply, disabled }: { onApply: (opts: any)=> void; disabled: boolean }) {
+function ApplyControls({ onApply, disabled }: { onApply: (opts: ApplyOptions)=> void; disabled: boolean }) {
   const [title, setTitle] = useState(true);
   const [desc, setDesc] = useState(true);
   const [ac, setAc] = useState(true);
@@ -583,7 +671,25 @@ function ApplyControls({ onApply, disabled }: { onApply: (opts: any)=> void; dis
         <label className="flex items-center gap-1"><input type="checkbox" checked={tcs} onChange={(e)=> setTcs(e.target.checked)} /> Create Test Cases</label>
         <label className="flex items-center gap-1"><input type="checkbox" checked={sp} onChange={(e)=> setSp(e.target.checked)} /> Set Story Points</label>
       </div>
-      <Button onClick={()=> onApply({ selectedFields: [title&&'title', desc&&'description', ac&&'acceptance'].filter(Boolean), createTasks: tasks, createTestCases: tcs, setStoryPoints: sp })} disabled={disabled}>Apply Changes</Button>
+      <Button
+        onClick={() => {
+          const selectedFields = [
+            title ? 'title' : null,
+            desc ? 'description' : null,
+            ac ? 'acceptance' : null,
+          ].filter((field): field is string => typeof field === 'string');
+
+          onApply({
+            selectedFields,
+            createTasks: tasks,
+            createTestCases: tcs,
+            setStoryPoints: sp,
+          });
+        }}
+        disabled={disabled}
+      >
+        Apply Changes
+      </Button>
     </div>
   );
 }
