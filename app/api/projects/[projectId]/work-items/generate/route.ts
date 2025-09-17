@@ -1,8 +1,154 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from '@/../lib/supabase/server';
 import OpenAI from 'openai';
+import { strict } from 'assert';
+
 
 const STANDARD_ENGINEERING_TASKS = ['PR Review', 'Dev Testing', 'QA Handoff'];
+
+// --- Reusable helpers & shared schema (DRY) ---
+const clip = (s: unknown, max: number): string =>
+  (typeof s === 'string' ? s : (s == null ? '' : String(s))).slice(0, Math.max(0, max));
+const approxTokens = (s: string) => Math.ceil(s.length / 4); // rough heuristic
+
+// JSON Schema used for structured outputs, reused across calls
+const WORK_ITEM_SCHEMA: any = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    title: { type: 'string' },
+    type: { type: 'string', enum: ['User Story', 'SPIKE', 'Bug', 'Task', 'Test Case'] },
+    roleGoalReason: { type: ['string', 'null'] },
+    descriptionText: { type: 'string' },
+    acceptanceCriteria: { type: 'array', items: { type: 'string' } },
+    testCases: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          given: { type: 'string' },
+          when: { type: 'string' },
+          then: { type: 'string' },
+        },
+        required: ['given', 'when', 'then'],
+      },
+    },
+    implementationNotes: { type: 'array', items: { type: 'string' } },
+    tasks: { type: 'array', items: { type: 'string' } },
+    gaps: { type: 'array', items: { type: 'string' } },
+    dependencies: { type: 'array', items: { type: 'string' } },
+    storyPoints: { type: ['number', 'null'] },
+    estimateRationale: { type: ['string', 'null'] },
+    tags: { type: 'array', items: { type: 'string' } },
+  },
+  required: [
+    'title',
+    'type',
+    'roleGoalReason',
+    'descriptionText',
+    'acceptanceCriteria',
+    'testCases',
+    'implementationNotes',
+    'tasks',
+    'gaps',
+    'dependencies',
+    'storyPoints',
+    'estimateRationale',
+    'tags',
+  ],
+};
+
+const TEXT_FORMAT = {
+  type: 'json_schema',
+  name: 'WorkItemEnhancement',
+  strict: true,
+  schema: WORK_ITEM_SCHEMA,
+} as const;
+
+
+// --- OpenAI call retry helpers ---
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> => {
+  return new Promise((resolve, reject) => {
+    const to = setTimeout(() => reject(new Error(`Timeout after ${ms}ms`)), ms);
+    p.then((v) => { clearTimeout(to); resolve(v); }, (e) => { clearTimeout(to); reject(e); });
+  });
+};
+type OAICall<T> = () => Promise<T>;
+async function callWithRetry<T>(fn: OAICall<T>, label: string, maxRetries = 3): Promise<T> {
+  let attempt = 0;
+  let lastErr: any;
+  while (attempt <= maxRetries) {
+    try {
+      // 45s default timeout per call to avoid hanging
+      return await withTimeout(fn(), 45_000);
+    } catch (err: any) {
+      lastErr = err;
+      const status = err?.status ?? err?.response?.status;
+      const retryAfterHeader = err?.headers?.get?.('retry-after') || err?.response?.headers?.get?.('retry-after');
+      const retryAfter = retryAfterHeader ? parseInt(retryAfterHeader, 10) * 1000 : undefined;
+      const isRetriable =
+        status === 408 || status === 409 || status === 425 ||
+        status === 429 || (status >= 500 && status <= 599) ||
+        (err?.message && /Timeout/i.test(err.message));
+      if (!isRetriable || attempt === maxRetries) break;
+      const base = 500 * Math.pow(2, attempt);
+      const jitter = Math.floor(Math.random() * 250);
+      const delay = retryAfter ?? (base + jitter);
+      console.warn(`[OpenAI:${label}] attempt ${attempt + 1} failed (status=${status}); retrying in ${delay}ms`);
+      await sleep(delay);
+      attempt++;
+    }
+  }
+  throw lastErr;
+}
+// --- End retry helpers ---
+
+// --- Guardrails parsing helpers (dynamic, project-driven) ---
+function parseGuardrailsSections(txt: string) {
+  const lines = (txt || '').split(/\r?\n/).map(l => l.trim());
+  const sections: Record<string, string[]> = {};
+  let current: string | null = null;
+  for (const l of lines) {
+    if (!l) continue;
+    // Heuristic section headers
+    if (/^allowed\b|^primary\b|^allowed\s*\/\s*primary/i.test(l)) { current = 'allowed'; sections.allowed ||= []; continue; }
+    if (/^principles\b/i.test(l)) { current = 'principles'; sections.principles ||= []; continue; }
+    if (/^forbidden\b|^not allowed\b|^disallowed\b/i.test(l)) { current = 'forbidden'; sections.forbidden ||= []; continue; }
+    if (/^conformance\b|^rules?\b|^constraints?\b/i.test(l)) { current = 'conformance'; sections.conformance ||= []; continue; }
+    if (/^\-|\•/.test(l)) {
+      const item = l.replace(/^[\-\•]\s*/, '').trim();
+      if (current) {
+        (sections[current] ||= []).push(item);
+      }
+    }
+  }
+  return {
+    allowed: sections.allowed || [],
+    forbidden: sections.forbidden || [],
+    principles: sections.principles || [],
+    conformance: sections.conformance || [],
+  };
+}
+
+function buildForbiddenRegexFromGuardrails(txt: string): RegExp | null {
+  const { forbidden } = parseGuardrailsSections(txt);
+  const terms = forbidden
+    .map(s => s
+      .replace(/\(.*?\)/g, '') // drop parentheses
+      .replace(/^[A-Za-z\s]+:\s*/i, '') // drop leading labels
+      .split(/[,\|/]+/) // split comma/pipe/slash lists
+      .map(t => t.trim()))
+    .flat()
+    .filter(Boolean)
+    .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')); // escape for regex
+  if (!terms.length) return null;
+  // word boundary around each term where possible
+  const pattern = '\\b(' + terms.join('|') + ')\\b';
+  try { return new RegExp(pattern, 'i'); } catch { return null; }
+}
+// --- End guardrails parsing helpers ---
 
 async function fetchAdoItemDetail(projectId: string, itemId: string, supabase: any) {
   const { data: integration } = await supabase
@@ -62,6 +208,24 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
     .eq('id', params.projectId)
     .maybeSingle();
   if (!project) return NextResponse.json({ message: 'Project not found' }, { status: 404 });
+
+  // Default project tech guardrails (DB can override via projects.guardrails)
+  const DEFAULT_GUARDRAILS = `
+  Allowed / Primary Platforms:
+  - Microsoft Copilot Studio for conversational experiences
+  - Power Automate flows for orchestration and integrations
+  - Microsoft Dataverse for operational data storage and standard tables
+  Principles:
+  - Prefer out-of-the-box (OOTB) capabilities and connectors before proposing any custom code.
+  - Only escalate to Azure AI Foundry or other Azure Services when OOTB cannot satisfy clearly-stated requirements.
+  Forbidden unless explicitly justified with a concrete gap and approval:
+  - .NET/C# services, custom Web APIs, SQL Server schema changes, bespoke front-ends, or unmanaged Azure services.
+  Conformance rule:
+  - Based on User Story and Context Implementation Notes and Tasks must reference Copilot Studio actions/skills, Power Automate flows, and Dataverse first. If any non-allowed technology is suggested, include a GAP explaining why OOTB is insufficient and add a task to seek approval.
+  `;
+  const projectGuardrails: string = (project as any).guardrails && String((project as any).guardrails).trim().length
+    ? String((project as any).guardrails)
+    : DEFAULT_GUARDRAILS;
 
   // Create run
   const { data: run, error: runErr } = await supabase
@@ -146,13 +310,13 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
       try {
         const before = it.before_json || {};
         const beforeText = {
-          title: before.title || '',
-          descriptionText: stripHtml(before.descriptionHtml),
-          acceptanceCriteriaText: stripHtml(before.acceptanceCriteriaHtml),
+          title: clip(before.title || '', 200),
+          descriptionText: clip(stripHtml(before.descriptionHtml), 4000),
+          acceptanceCriteriaText: clip(stripHtml(before.acceptanceCriteriaHtml), 2000),
         };
         let after = before;
         if (openai) {
-          const sys = `Principal-level Agile coach and analyst who produces Azure DevOps-ready user stories or discovery SPIKEs.
+        const sys = `Principal-level Agile coach and analyst who's a Power Platform expert who produces Azure DevOps-ready user stories or discovery SPIKEs.
 User Stories (Azure DevOps, plain text only)
 Template:
 Title: <Story title>
@@ -188,105 +352,246 @@ Rules
 - Keep explanations precise, concise, and professional.
 - Always include the Role-Goal-Reason as the first line of the description.
 - Replace every '<List here>' placeholder with concrete details derived from the work item, templates, and context. Never leave placeholders in the output.
-- Always include the standard engineering tasks PR Review, Dev Testing, and QA Handoff in addition to any context-specific tasks.`;
+- Always include the standard engineering tasks PR Review, Dev Testing, and QA Handoff in addition to any context-specific tasks.
+
+Platform Guardrails (Project-Specific)
+${projectGuardrails}
+`;
+
+          const useVectorStore = Boolean(project.openai_vector_store_id);
+
           const contextNames = selectedContexts
             .map((c: any) => c.file_name || c.metadata?.originalName)
             .filter((name: unknown): name is string => typeof name === 'string' && name.length > 0);
-          const useVectorStore = Boolean(project.openai_vector_store_id);
+
+          // Enforce empty fallbackContext when using vector store
+          let fallbackContext: string[] = [];
+          if (!useVectorStore) {
+            const raw = contextTexts.slice(0, 10);
+            fallbackContext = raw.map((t) => clip(t, 1500));
+          }
+
           const userPayload = {
             project: { id: params.projectId, name: project.name },
             workItemPlain: beforeText,
-            template: template ? { name: template.name, body: template.body } : null,
-            selectedContextFiles: contextNames,
-            fallbackContext: contextTexts.slice(0, 20),
+            template: template ? { name: clip(template.name, 120), body: clip(template.body, 3500) } : null,
+            selectedContextFiles: contextNames.slice(0, 10).map((n) => clip(n, 200)),
+            fallbackContext,
           };
-          const response = await (openai.responses.create as any)({
-            model: 'gpt-4o-mini',
-            input: [
-              {
-                role: 'system',
-                content: [{ type: 'text', text: sys }],
-              },
-              {
-                role: 'user',
-                content: [
-                  {
-                    type: 'text',
-                    text: JSON.stringify({
-                      ...userPayload,
-                      instructions:
-                        'Use retrieval from the linked project vector store. If retrieval returns nothing relevant, rely on the provided work item details and template without inventing facts.',
-                    }),
-                  },
-                ],
-              },
-            ],
-            response_format: {
-              type: 'json_schema',
-              json_schema: {
-                name: 'WorkItemEnhancement',
-                strict: true,
-                schema: {
-                  type: 'object',
-                  additionalProperties: false,
-                  properties: {
-                    title: { type: 'string' },
-                    type: { type: 'string', enum: ['User Story', 'SPIKE', 'Bug', 'Task', 'Test Case'] },
-                    roleGoalReason: { type: ['string', 'null'] },
-                    descriptionText: { type: 'string' },
-                    acceptanceCriteria: { type: 'array', items: { type: 'string' } },
-                    testCases: {
-                      type: 'array',
-                      items: {
-                        type: 'object',
-                        additionalProperties: false,
-                        properties: {
-                          given: { type: 'string' },
-                          when: { type: 'string' },
-                          then: { type: 'string' },
-                        },
-                        required: ['given', 'when', 'then'],
-                      },
+
+          console.log('Prompt size debug', {
+            titleChars: beforeText.title.length,
+            descChars: beforeText.descriptionText.length,
+            acChars: beforeText.acceptanceCriteriaText.length,
+            tmplChars: template ? (template.body || '').length : 0,
+            fallbackChunks: userPayload.fallbackContext.length,
+            fallbackTotalChars: userPayload.fallbackContext.reduce((a, b) => a + b.length, 0),
+            approxPromptTokens: approxTokens(JSON.stringify({ sys, userPayload })),
+          });
+
+          // ---------- Phase 1: Retrieval-only micro call (one search, then stop) ----------
+          let retrievedSnippets: string[] = [];
+          let retrievalSummary: string = '';
+          if (useVectorStore) {
+            try {
+              const retrieval = await callWithRetry(
+                () => (openai.responses.create as any)({
+                  model: 'gpt-4o-mini',
+                  input: [
+                    {
+                      role: 'system',
+                      content: [{ type: 'input_text', text:
+                        `Role: Retrieval summarizer.
+                        Goal: Extract ONLY facts and requirements from retrieved files that are directly useful to author the ONE user story described by the query.
+                        Hard rules:
+                        - DO NOT give best practices, definitions of user stories, or generic advice.
+                        - DO NOT fabricate; include only information present in retrieved files.
+                        - Run AT MOST one file_search, then STOP.
+                        - Output MUST follow the RetrievalSummary JSON schema (no prose, no preamble).
+                        Relevance guidance:
+                        - Prioritize unique, non-redundant information.
+                        - Include detailed requirements and key points.` }],
                     },
-                    implementationNotes: { type: 'array', items: { type: 'string' } },
-                    tasks: { type: 'array', items: { type: 'string' } },
-                    gaps: { type: 'array', items: { type: 'string' } },
-                    dependencies: { type: 'array', items: { type: 'string' } },
-                    storyPoints: { type: ['number', 'null'] },
-                    estimateRationale: { type: ['string', 'null'] },
-                    tags: { type: 'array', items: { type: 'string' } },
-                  },
-                  required: [
-                    'title',
-                    'type',
-                    'roleGoalReason',
-                    'descriptionText',
-                    'acceptanceCriteria',
-                    'testCases',
-                    'implementationNotes',
-                    'tasks',
-                    'gaps',
-                    'dependencies',
-                    'storyPoints',
-                    'estimateRationale',
-                    'tags',
+                    {
+                      role: 'user',
+                      content: [
+                        {
+                          type: 'input_text',
+                          text:
+                            `Query: ${clip(beforeText.title || '', 200)}\n` +
+                            `Context hint: ${clip(beforeText.descriptionText || '', 300)}\n` +
+                            `If no evidence is found, return empty arrays and do NOT add generic guidance.`,
+                        },
+                      ],
+                    },
+                  ],
+                  tools: [
+                    {
+                      type: 'file_search',
+                      vector_store_ids: [project.openai_vector_store_id],
+                      max_num_results: 8,
+                      ranking_options: { ranker: 'auto', score_threshold: 0.2 },
+                    },
+                  ],
+                  parallel_tool_calls: false,
+                  max_tool_calls: 1,
+                  include: ['file_search_call.results'],
+                  max_output_tokens: 1200,
+                  temperature: 0.0,
+                }),
+                'retrieval',
+                1
+              );
+              console.log('Retrieval response', JSON.stringify(retrieval, null, 2));
+              // --- Capture any model-produced summary text
+              retrievalSummary = clip(extractText(retrieval), 2000); // capture any model-produced summary text
+              if (retrievalSummary && retrievalSummary.trim().length) {
+                console.log('Retrieval summary (clipped)', retrievalSummary);
+              }
+              const results =
+                (retrieval.output || [])
+                  .filter((n: any) => n?.type === 'file_search_call')
+                  .flatMap((n: any) => n?.results || []) || [];
+              retrievedSnippets = results.slice(0, 8).map((r: any) => clip(r?.text || '', 1200));
+              // Prepend the summary to snippets (so it’s first)
+              if (retrievalSummary && retrievalSummary.trim().length) {
+                retrievedSnippets.unshift(`[RETRIEVAL SUMMARY]\n${retrievalSummary}`);
+              }
+              // Update: log summary presence/length
+              console.log('Retrieval summary', {
+                hits: results.length,
+                used: retrievedSnippets.length,
+                hasSummary: Boolean(retrievalSummary && retrievalSummary.trim().length),
+                summaryChars: (retrievalSummary || '').length,
+                totalChars: retrievedSnippets.reduce((a, b) => a + b.length, 0),
+              });
+            } catch (reErr: any) {
+              const reqId =
+                reErr?.headers?.get?.('x-request-id') ||
+                reErr?.response?.headers?.get?.('x-request-id') ||
+                reErr?.request_id ||
+                reErr?.requestId ||
+                null;
+              console.warn('[Retrieval] failed; continuing without snippets', { status: reErr?.status ?? reErr?.response?.status, request_id: reqId, message: reErr?.message });
+              // continue with empty retrievedSnippets
+            }
+          }
+
+          // ---------- Phase 2: Generation-only (no tools) ----------
+          const response = await callWithRetry(
+            () => (openai.responses.create as any)({
+              model: 'gpt-4o-mini',
+              input: [
+                {
+                  role: 'system',
+                  content: [{ type: 'input_text', text: sys }],
+                },
+                {
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'input_text',
+                      text:
+                        `You are enhancing an Azure DevOps work item into a complete, ADO-ready user story.
+                        STRICT TECH CONSTRAINTS: Follow the "Platform Guardrails (Project-Specific)" in the system message.
+                        - If inputs or context propose solutions outside the project guardrails, rewrite them to guardrail-compliant options or add a GAP explaining the exception with an approval task.
+                        Use the retrievedSummary (if present) and retrievedContext as supporting evidence. Always produce JSON per schema.
+                        ` +
+                        JSON.stringify({
+                          ...userPayload,
+                          retrievedSummary: (retrievedSnippets.length && retrievedSnippets[0].startsWith('[RETRIEVAL SUMMARY]')) ? retrievedSnippets[0].slice('[RETRIEVAL SUMMARY]'.length + 1) : '',
+                          retrievedContext: retrievedSnippets,
+                          instructions:
+                            'Use retrievedSummary first (if present) and retrievedContext as supporting evidence. If retrieval returns nothing, rely on inputs; do not invent facts.',
+                        }),
+                    },
                   ],
                 },
-              },
-            },
-            tools: useVectorStore ? [{ type: 'file_search' }] : undefined,
-            tool_resources: useVectorStore
-              ? { file_search: { vector_store_ids: [project.openai_vector_store_id] } }
-              : undefined,
-            temperature: 0.3,
-          });
-          const outText = (response?.output_text || extractText(response) || '').toString();
-          let json: any = {};
-          try {
-            json = JSON.parse(outText);
-          } catch {
-            json = {};
+              ],
+              text: { format: TEXT_FORMAT },
+              tool_choice: 'none',
+              max_output_tokens: 1200,
+              temperature: 0.3,
+            }),
+            'generation',
+            3
+          );
+          console.log('OpenAI generation response', JSON.stringify(response, null, 2));
+
+          // Prefer structured outputs (.parsed) from the Phase 2 response
+          function extractParsed(r: any): any | null {
+            try {
+              const outputs = r?.output || [];
+              for (const node of outputs) {
+                if (node?.type === 'message') {
+                  const parts = node?.content || [];
+                  for (const p of parts) {
+                    if (p?.parsed) return p.parsed;
+                  }
+                }
+              }
+            } catch {}
+            return null;
           }
+          let parsed = extractParsed(response) || null;
+
+          // Also try output_text as a final fallback
+          if (!parsed) {
+            const txt = (response?.output_text || extractText(response) || '').toString();
+            try { parsed = JSON.parse(txt); } catch { parsed = null; }
+          }
+
+          if (!parsed || typeof parsed !== 'object') {
+            throw new Error('Model returned no structured output.');
+          }
+
+          let json: any = parsed;
+
+          // Enforce tech guardrails dynamically from projectGuardrails
+          const forbiddenRe = buildForbiddenRegexFromGuardrails(projectGuardrails);
+          const jsonStrForScan = JSON.stringify({
+            implementationNotes: json.implementationNotes || [],
+            tasks: json.tasks || [],
+            descriptionText: json.descriptionText || '',
+            title: json.title || ''
+          });
+          const mentionsForbidden = !!(forbiddenRe && forbiddenRe.test(jsonStrForScan));
+          if (mentionsForbidden) {
+            json.gaps = Array.isArray(json.gaps) ? json.gaps : [];
+            if (!json.gaps.some((g: string) => /guardrails|approval|justify|exception|conformance/i.test(g))) {
+              json.gaps.push('Potential guardrails nonconformance: Proposed technologies appear to conflict with project guardrails. Provide justification, alternatives aligned to guardrails, and request approval if exception is needed.');
+            }
+            json.tasks = Array.isArray(json.tasks) ? json.tasks : [];
+            if (!json.tasks.some((t: string) => /Architectural Approval/i.test(t))) {
+              json.tasks.push('Architectural Approval: Review exception request against project guardrails and approve or redirect to guardrail-compliant approach.');
+            }
+          }
+
+          // Normalize Implementation Notes to foreground project guardrails (dynamic)
+          const implNotes = Array.isArray(json.implementationNotes) ? json.implementationNotes : [];
+          const { allowed: allowedStack, principles: principleLines } = parseGuardrailsSections(projectGuardrails);
+          const preferredNotes: string[] = [];
+
+          // Add principles first (shortened)
+          for (const p of principleLines.slice(0, 3)) {
+            const note = p.endsWith('.') ? p : `${p}.`;
+            preferredNotes.push(note);
+          }
+          // Then add allowed platforms/tools as guidance
+          for (const a of allowedStack.slice(0, 5)) {
+            const note = a.endsWith('.') ? a : `${a}.`;
+            if (!preferredNotes.includes(note)) preferredNotes.push(note);
+          }
+          // Prepend any missing preferred notes
+          for (let i = preferredNotes.length - 1; i >= 0; i--) {
+            const n = preferredNotes[i];
+            if (!implNotes.some((x) => x.toLowerCase() === n.toLowerCase())) {
+              implNotes.unshift(n);
+            }
+          }
+          json.implementationNotes = implNotes;
+
+          // --- The rest of your transformation to ADO fields (unchanged below this line) ---
           let roleGoalReason = json.roleGoalReason as string | null | undefined;
           if (!roleGoalReason && typeof json.descriptionText === 'string') {
             const firstLine = json.descriptionText.split(/\n+/)[0] || '';
@@ -359,7 +664,13 @@ Rules
           .update({ status: 'generated', after_json: after })
           .eq('id', it.id);
       } catch (err: any) {
-        const errorPayload = { error: err?.message || String(err) };
+        const reqId =
+          err?.headers?.get?.('x-request-id') ||
+          err?.response?.headers?.get?.('x-request-id') ||
+          err?.request_id ||
+          err?.requestId ||
+          null;
+        const errorPayload = { error: err?.message || String(err), request_id: reqId, status: err?.status ?? err?.response?.status ?? null };
         await supabase.from('run_items').update({ status: 'rejected', after_json: errorPayload }).eq('id', it.id);
       }
     }
