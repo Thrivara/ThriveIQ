@@ -690,34 +690,34 @@ export default function Templates() {
                   </TabsTrigger>
                 ))}
               </TabsList>
+              <div className="flex flex-wrap items-center gap-3">
+                <Input
+                  placeholder="Search templates"
+                  className="max-w-sm"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+                {templatesQuery.isFetching && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+              </div>
+              <TabsContent value={view} className="mt-0">
+                <TemplateList
+                  templates={templates}
+                  loading={templatesQuery.isLoading}
+                  onEdit={(template) => setEditTemplate(template)}
+                  onPublish={(template) => publishTemplate.mutate(template)}
+                  onArchive={(template) => archiveTemplate.mutate(template)}
+                  onDuplicateDraft={(template) => duplicateDraft.mutate(template)}
+                  onViewHistory={(template) => setHistoryTemplate(template)}
+                  busy={
+                    createTemplate.isPending ||
+                    updateTemplate.isPending ||
+                    publishTemplate.isPending ||
+                    archiveTemplate.isPending ||
+                    duplicateDraft.isPending
+                  }
+                />
+              </TabsContent>
             </Tabs>
-            <div className="flex flex-wrap items-center gap-3">
-              <Input
-                placeholder="Search templates"
-                className="max-w-sm"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-              {templatesQuery.isFetching && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-            </div>
-            <TabsContent value={view} className="mt-0">
-              <TemplateList
-                templates={templates}
-                loading={templatesQuery.isLoading}
-                onEdit={(template) => setEditTemplate(template)}
-                onPublish={(template) => publishTemplate.mutate(template)}
-                onArchive={(template) => archiveTemplate.mutate(template)}
-                onDuplicateDraft={(template) => duplicateDraft.mutate(template)}
-                onViewHistory={(template) => setHistoryTemplate(template)}
-                busy={
-                  createTemplate.isPending ||
-                  updateTemplate.isPending ||
-                  publishTemplate.isPending ||
-                  archiveTemplate.isPending ||
-                  duplicateDraft.isPending
-                }
-              />
-            </TabsContent>
           </CardContent>
         </Card>
       </div>

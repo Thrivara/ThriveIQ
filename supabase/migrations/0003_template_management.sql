@@ -5,8 +5,12 @@ CREATE TYPE template_version_status AS ENUM ('draft', 'published');
 ALTER TABLE templates
   ADD COLUMN latest_version_id uuid,
   ADD COLUMN status template_status DEFAULT 'active' NOT NULL,
-  ADD COLUMN created_by uuid REFERENCES users(id),
-  ADD COLUMN updated_by uuid REFERENCES users(id);
+  ADD COLUMN created_by varchar,
+  ADD COLUMN updated_by varchar;
+
+ALTER TABLE templates
+  ADD CONSTRAINT templates_created_by_fkey FOREIGN KEY (created_by) REFERENCES public.users(id),
+  ADD CONSTRAINT templates_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES public.users(id);
 
 ALTER TABLE templates
   DROP COLUMN body,
@@ -23,8 +27,8 @@ CREATE TABLE template_versions (
   variables_json jsonb NOT NULL DEFAULT '[]'::jsonb,
   example_payload_json jsonb,
   published_at timestamptz,
-  published_by uuid REFERENCES users(id),
-  created_by uuid REFERENCES users(id),
+  published_by varchar REFERENCES public.users(id),
+  created_by varchar REFERENCES public.users(id),
   created_at timestamptz DEFAULT now()
 );
 
@@ -39,7 +43,7 @@ CREATE TABLE template_audit (
   project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   template_id uuid REFERENCES templates(id) ON DELETE CASCADE,
   template_version_id uuid REFERENCES template_versions(id) ON DELETE CASCADE,
-  actor_user_id uuid NOT NULL REFERENCES users(id),
+  actor_user_id varchar NOT NULL REFERENCES public.users(id),
   action text NOT NULL,
   details_json jsonb,
   created_at timestamptz DEFAULT now()
