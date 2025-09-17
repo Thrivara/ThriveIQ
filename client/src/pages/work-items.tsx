@@ -312,12 +312,20 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
       return res.json();
     }
   });
-  const templatesQ = useQuery<any[]>({
-    queryKey: ['/api/projects', projectId, 'templates'],
+  const templatesQ = useQuery<{ id: string; name: string; version?: number }[]>({
+    queryKey: ['/api/projects', projectId, 'templates', 'published'],
+    enabled: !!projectId,
     queryFn: async () => {
-      const res = await fetch(`/api/projects/${projectId}/templates`);
+      if (!projectId) return [];
+      const res = await fetch(`/api/projects/${projectId}/templates?view=published&limit=100`);
       if (!res.ok) throw new Error(await res.text());
-      return res.json();
+      const json = await res.json();
+      const items: any[] = json?.items ?? [];
+      return items.map(item => ({
+        id: item.id,
+        name: item.name,
+        version: item.publishedVersion?.version ?? item.latestVersion?.version ?? null,
+      }));
     }
   });
   const contextsQ = useQuery<ProjectContext[]>({
@@ -470,10 +478,22 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <div className="text-sm font-medium mb-1">Template</div>
-              <select className="w-full border rounded px-2 py-1" value={templateId} onChange={(e)=> setTemplateId(e.target.value)}>
+              <select
+                className="w-full border rounded px-2 py-1"
+                value={templateId}
+                onChange={(event)=> setTemplateId(event.target.value)}
+                disabled={templatesQ.isLoading}
+              >
                 <option value="">(None)</option>
-                {(templatesQ.data||[]).map((t:any)=> <option key={t.id} value={t.id}>{t.name}</option>)}
+                {(templatesQ.data||[]).map((t)=> (
+                  <option key={t.id} value={t.id}>
+                    {t.name}{t.version ? ` (v${t.version})` : ''}
+                  </option>
+                ))}
               </select>
+              {!templatesQ.isLoading && (templatesQ.data?.length ?? 0) === 0 && (
+                <p className="text-xs text-muted-foreground mt-1">Publish a template to make it selectable.</p>
+              )}
             </div>
             <div>
               <div className="text-sm font-medium mb-1">Contexts</div>
