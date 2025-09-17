@@ -209,6 +209,37 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
     .maybeSingle();
   if (!project) return NextResponse.json({ message: 'Project not found' }, { status: 404 });
 
+  let templateContainer: Record<string, unknown> | null = null;
+  let templateVersion: Record<string, unknown> | null = null;
+  if (templateId) {
+    const { data: container, error: templateError } = await supabase
+      .from('templates')
+      .select('*')
+      .eq('id', templateId)
+      .eq('project_id', params.projectId)
+      .maybeSingle();
+    if (templateError) return NextResponse.json({ message: templateError.message }, { status: 500 });
+    if (!container) return NextResponse.json({ message: 'Template not found' }, { status: 404 });
+    if (container.status === 'archived') {
+      return NextResponse.json({ message: 'Archived templates cannot be used for generation' }, { status: 400 });
+    }
+
+    const { data: publishedVersion, error: versionError } = await supabase
+      .from('template_versions')
+      .select('*')
+      .eq('template_id', templateId)
+      .eq('status', 'published')
+      .order('version', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (versionError) return NextResponse.json({ message: versionError.message }, { status: 500 });
+    if (!publishedVersion) {
+      return NextResponse.json({ message: 'Template must have a published version before generating' }, { status: 400 });
+    }
+    templateContainer = container;
+    templateVersion = publishedVersion;
+  }
+
   // Default project tech guardrails (DB can override via projects.guardrails)
   const DEFAULT_GUARDRAILS = `
   Allowed / Primary Platforms:
@@ -234,6 +265,8 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
       user_id: user.id,
       project_id: params.projectId,
       template_id: templateId ?? null,
+      template_version_id: templateVersion?.id ?? null,
+      template_version: templateVersion?.version ?? null,
       provider: 'openai',
       model: 'gpt-4o',
       status: 'pending',
@@ -254,11 +287,14 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
   }
 
   // Optional: load template + contexts once
-  let template: any = null;
-  if (templateId) {
-    const { data: t } = await supabase.from('templates').select('*').eq('id', templateId).maybeSingle();
-    template = t || null;
-  }
+  const template: any = templateContainer
+    ? {
+        ...templateContainer,
+        body: templateVersion?.body,
+        variables_json: templateVersion?.variables_json,
+        version: templateVersion?.version,
+      }
+    : null;
   let selectedContexts: any[] = [];
   if (contextIds.length) {
     const { data: ctxs } = await supabase
