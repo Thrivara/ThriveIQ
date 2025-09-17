@@ -66,6 +66,7 @@ const TEXT_FORMAT = {
   schema: WORK_ITEM_SCHEMA,
 } as const;
 
+
 // --- OpenAI call retry helpers ---
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> => {
@@ -103,6 +104,51 @@ async function callWithRetry<T>(fn: OAICall<T>, label: string, maxRetries = 3): 
   throw lastErr;
 }
 // --- End retry helpers ---
+
+// --- Guardrails parsing helpers (dynamic, project-driven) ---
+function parseGuardrailsSections(txt: string) {
+  const lines = (txt || '').split(/\r?\n/).map(l => l.trim());
+  const sections: Record<string, string[]> = {};
+  let current: string | null = null;
+  for (const l of lines) {
+    if (!l) continue;
+    // Heuristic section headers
+    if (/^allowed\b|^primary\b|^allowed\s*\/\s*primary/i.test(l)) { current = 'allowed'; sections.allowed ||= []; continue; }
+    if (/^principles\b/i.test(l)) { current = 'principles'; sections.principles ||= []; continue; }
+    if (/^forbidden\b|^not allowed\b|^disallowed\b/i.test(l)) { current = 'forbidden'; sections.forbidden ||= []; continue; }
+    if (/^conformance\b|^rules?\b|^constraints?\b/i.test(l)) { current = 'conformance'; sections.conformance ||= []; continue; }
+    if (/^\-|\•/.test(l)) {
+      const item = l.replace(/^[\-\•]\s*/, '').trim();
+      if (current) {
+        (sections[current] ||= []).push(item);
+      }
+    }
+  }
+  return {
+    allowed: sections.allowed || [],
+    forbidden: sections.forbidden || [],
+    principles: sections.principles || [],
+    conformance: sections.conformance || [],
+  };
+}
+
+function buildForbiddenRegexFromGuardrails(txt: string): RegExp | null {
+  const { forbidden } = parseGuardrailsSections(txt);
+  const terms = forbidden
+    .map(s => s
+      .replace(/\(.*?\)/g, '') // drop parentheses
+      .replace(/^[A-Za-z\s]+:\s*/i, '') // drop leading labels
+      .split(/[,\|/]+/) // split comma/pipe/slash lists
+      .map(t => t.trim()))
+    .flat()
+    .filter(Boolean)
+    .map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')); // escape for regex
+  if (!terms.length) return null;
+  // word boundary around each term where possible
+  const pattern = '\\b(' + terms.join('|') + ')\\b';
+  try { return new RegExp(pattern, 'i'); } catch { return null; }
+}
+// --- End guardrails parsing helpers ---
 
 async function fetchAdoItemDetail(projectId: string, itemId: string, supabase: any) {
   const { data: integration } = await supabase
@@ -162,6 +208,24 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
     .eq('id', params.projectId)
     .maybeSingle();
   if (!project) return NextResponse.json({ message: 'Project not found' }, { status: 404 });
+
+  // Default project tech guardrails (DB can override via projects.guardrails)
+  const DEFAULT_GUARDRAILS = `
+  Allowed / Primary Platforms:
+  - Microsoft Copilot Studio for conversational experiences
+  - Power Automate flows for orchestration and integrations
+  - Microsoft Dataverse for operational data storage and standard tables
+  Principles:
+  - Prefer out-of-the-box (OOTB) capabilities and connectors before proposing any custom code.
+  - Only escalate to Azure AI Foundry or other Azure Services when OOTB cannot satisfy clearly-stated requirements.
+  Forbidden unless explicitly justified with a concrete gap and approval:
+  - .NET/C# services, custom Web APIs, SQL Server schema changes, bespoke front-ends, or unmanaged Azure services.
+  Conformance rule:
+  - Based on User Story and Context Implementation Notes and Tasks must reference Copilot Studio actions/skills, Power Automate flows, and Dataverse first. If any non-allowed technology is suggested, include a GAP explaining why OOTB is insufficient and add a task to seek approval.
+  `;
+  const projectGuardrails: string = (project as any).guardrails && String((project as any).guardrails).trim().length
+    ? String((project as any).guardrails)
+    : DEFAULT_GUARDRAILS;
 
   // Create run
   const { data: run, error: runErr } = await supabase
@@ -252,7 +316,7 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
         };
         let after = before;
         if (openai) {
-          const sys = `Principal-level Agile coach and analyst who produces Azure DevOps-ready user stories or discovery SPIKEs.
+        const sys = `Principal-level Agile coach and analyst who's a Power Platform expert who produces Azure DevOps-ready user stories or discovery SPIKEs.
 User Stories (Azure DevOps, plain text only)
 Template:
 Title: <Story title>
@@ -288,7 +352,11 @@ Rules
 - Keep explanations precise, concise, and professional.
 - Always include the Role-Goal-Reason as the first line of the description.
 - Replace every '<List here>' placeholder with concrete details derived from the work item, templates, and context. Never leave placeholders in the output.
-- Always include the standard engineering tasks PR Review, Dev Testing, and QA Handoff in addition to any context-specific tasks.`;
+- Always include the standard engineering tasks PR Review, Dev Testing, and QA Handoff in addition to any context-specific tasks.
+
+Platform Guardrails (Project-Specific)
+${projectGuardrails}
+`;
 
           const useVectorStore = Boolean(project.openai_vector_store_id);
 
@@ -332,7 +400,17 @@ Rules
                   input: [
                     {
                       role: 'system',
-                      content: [{ type: 'input_text', text: 'You will perform a single file_search and then stop. Do not generate a story.' }],
+                      content: [{ type: 'input_text', text:
+                        `Role: Retrieval summarizer.
+                        Goal: Extract ONLY facts and requirements from retrieved files that are directly useful to author the ONE user story described by the query.
+                        Hard rules:
+                        - DO NOT give best practices, definitions of user stories, or generic advice.
+                        - DO NOT fabricate; include only information present in retrieved files.
+                        - Run AT MOST one file_search, then STOP.
+                        - Output MUST follow the RetrievalSummary JSON schema (no prose, no preamble).
+                        Relevance guidance:
+                        - Prioritize unique, non-redundant information.
+                        - Include detailed requirements and key points.` }],
                     },
                     {
                       role: 'user',
@@ -340,10 +418,9 @@ Rules
                         {
                           type: 'input_text',
                           text:
-                            `Search the project vector store for material that helps generate a high-quality user story.\n` +
                             `Query: ${clip(beforeText.title || '', 200)}\n` +
                             `Context hint: ${clip(beforeText.descriptionText || '', 300)}\n` +
-                            `Return control without generating text.`,
+                            `If no evidence is found, return empty arrays and do NOT add generic guidance.`,
                         },
                       ],
                     },
@@ -380,7 +457,6 @@ Rules
               if (retrievalSummary && retrievalSummary.trim().length) {
                 retrievedSnippets.unshift(`[RETRIEVAL SUMMARY]\n${retrievalSummary}`);
               }
-              console.log('Retrieved snippets', retrievedSnippets);
               // Update: log summary presence/length
               console.log('Retrieval summary', {
                 hits: results.length,
@@ -416,8 +492,11 @@ Rules
                     {
                       type: 'input_text',
                       text:
-                        `You are enhancing an Azure DevOps work item into a complete, ADO-ready user story.\n` +
-                        `Use the retrievedSummary first (if present) and retrievedContext as supporting evidence. If retrieval returns nothing, rely on inputs; do not invent facts.\n\n` +
+                        `You are enhancing an Azure DevOps work item into a complete, ADO-ready user story.
+                        STRICT TECH CONSTRAINTS: Follow the "Platform Guardrails (Project-Specific)" in the system message.
+                        - If inputs or context propose solutions outside the project guardrails, rewrite them to guardrail-compliant options or add a GAP explaining the exception with an approval task.
+                        Use the retrievedSummary (if present) and retrievedContext as supporting evidence. Always produce JSON per schema.
+                        ` +
                         JSON.stringify({
                           ...userPayload,
                           retrievedSummary: (retrievedSnippets.length && retrievedSnippets[0].startsWith('[RETRIEVAL SUMMARY]')) ? retrievedSnippets[0].slice('[RETRIEVAL SUMMARY]'.length + 1) : '',
@@ -467,6 +546,50 @@ Rules
           }
 
           let json: any = parsed;
+
+          // Enforce tech guardrails dynamically from projectGuardrails
+          const forbiddenRe = buildForbiddenRegexFromGuardrails(projectGuardrails);
+          const jsonStrForScan = JSON.stringify({
+            implementationNotes: json.implementationNotes || [],
+            tasks: json.tasks || [],
+            descriptionText: json.descriptionText || '',
+            title: json.title || ''
+          });
+          const mentionsForbidden = !!(forbiddenRe && forbiddenRe.test(jsonStrForScan));
+          if (mentionsForbidden) {
+            json.gaps = Array.isArray(json.gaps) ? json.gaps : [];
+            if (!json.gaps.some((g: string) => /guardrails|approval|justify|exception|conformance/i.test(g))) {
+              json.gaps.push('Potential guardrails nonconformance: Proposed technologies appear to conflict with project guardrails. Provide justification, alternatives aligned to guardrails, and request approval if exception is needed.');
+            }
+            json.tasks = Array.isArray(json.tasks) ? json.tasks : [];
+            if (!json.tasks.some((t: string) => /Architectural Approval/i.test(t))) {
+              json.tasks.push('Architectural Approval: Review exception request against project guardrails and approve or redirect to guardrail-compliant approach.');
+            }
+          }
+
+          // Normalize Implementation Notes to foreground project guardrails (dynamic)
+          const implNotes = Array.isArray(json.implementationNotes) ? json.implementationNotes : [];
+          const { allowed: allowedStack, principles: principleLines } = parseGuardrailsSections(projectGuardrails);
+          const preferredNotes: string[] = [];
+
+          // Add principles first (shortened)
+          for (const p of principleLines.slice(0, 3)) {
+            const note = p.endsWith('.') ? p : `${p}.`;
+            preferredNotes.push(note);
+          }
+          // Then add allowed platforms/tools as guidance
+          for (const a of allowedStack.slice(0, 5)) {
+            const note = a.endsWith('.') ? a : `${a}.`;
+            if (!preferredNotes.includes(note)) preferredNotes.push(note);
+          }
+          // Prepend any missing preferred notes
+          for (let i = preferredNotes.length - 1; i >= 0; i--) {
+            const n = preferredNotes[i];
+            if (!implNotes.some((x) => x.toLowerCase() === n.toLowerCase())) {
+              implNotes.unshift(n);
+            }
+          }
+          json.implementationNotes = implNotes;
 
           // --- The rest of your transformation to ADO fields (unchanged below this line) ---
           let roleGoalReason = json.roleGoalReason as string | null | undefined;
