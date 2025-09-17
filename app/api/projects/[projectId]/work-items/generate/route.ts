@@ -429,7 +429,7 @@ ${projectGuardrails}
           let retrievalSummary: string = '';
           if (useVectorStore) {
             try {
-              const retrieval = await callWithRetry(
+              const retrieval: any = await callWithRetry<any>(
                 () => (openai.responses.create as any)({
                   model: 'gpt-4o-mini',
                   input: [
@@ -513,7 +513,7 @@ ${projectGuardrails}
           }
 
           // ---------- Phase 2: Generation-only (no tools) ----------
-          const response = await callWithRetry(
+          const response: any = await callWithRetry<any>(
             () => (openai.responses.create as any)({
               model: 'gpt-4o-mini',
               input: [
@@ -554,7 +554,7 @@ ${projectGuardrails}
           console.log('OpenAI generation response', JSON.stringify(response, null, 2));
 
           // Prefer structured outputs (.parsed) from the Phase 2 response
-          function extractParsed(r: any): any | null {
+          const extractParsed = (r: any): any | null => {
             try {
               const outputs = r?.output || [];
               for (const node of outputs) {
@@ -572,7 +572,7 @@ ${projectGuardrails}
 
           // Also try output_text as a final fallback
           if (!parsed) {
-            const txt = (response?.output_text || extractText(response) || '').toString();
+            const txt = ((response as any)?.output_text || extractText(response) || '').toString();
             try { parsed = JSON.parse(txt); } catch { parsed = null; }
           }
 
@@ -602,29 +602,25 @@ ${projectGuardrails}
             }
           }
 
-          // Normalize Implementation Notes to foreground project guardrails (dynamic)
+          // Normalize Implementation Notes: only override if empty
           const implNotes = Array.isArray(json.implementationNotes) ? json.implementationNotes : [];
-          const { allowed: allowedStack, principles: principleLines } = parseGuardrailsSections(projectGuardrails);
-          const preferredNotes: string[] = [];
-
-          // Add principles first (shortened)
-          for (const p of principleLines.slice(0, 3)) {
-            const note = p.endsWith('.') ? p : `${p}.`;
-            preferredNotes.push(note);
-          }
-          // Then add allowed platforms/tools as guidance
-          for (const a of allowedStack.slice(0, 5)) {
-            const note = a.endsWith('.') ? a : `${a}.`;
-            if (!preferredNotes.includes(note)) preferredNotes.push(note);
-          }
-          // Prepend any missing preferred notes
-          for (let i = preferredNotes.length - 1; i >= 0; i--) {
-            const n = preferredNotes[i];
-            if (!implNotes.some((x) => x.toLowerCase() === n.toLowerCase())) {
-              implNotes.unshift(n);
+          if (implNotes.length === 0) {
+            const { allowed: allowedStack, principles: principleLines } = parseGuardrailsSections(projectGuardrails);
+            const preferredNotes: string[] = [];
+            // Add principles first (shortened)
+            for (const p of principleLines.slice(0, 3)) {
+              const note = p.endsWith('.') ? p : `${p}.`;
+              preferredNotes.push(note);
             }
+            // Then add allowed platforms/tools as guidance
+            for (const a of allowedStack.slice(0, 5)) {
+              const note = a.endsWith('.') ? a : `${a}.`;
+              if (!preferredNotes.includes(note)) preferredNotes.push(note);
+            }
+            json.implementationNotes = preferredNotes;
+          } else {
+            json.implementationNotes = implNotes;
           }
-          json.implementationNotes = implNotes;
 
           // --- The rest of your transformation to ADO fields (unchanged below this line) ---
           let roleGoalReason = json.roleGoalReason as string | null | undefined;

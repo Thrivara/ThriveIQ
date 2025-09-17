@@ -62,7 +62,7 @@ export default function LoginPage() {
       </form>
 
       {/* Email + Password */}
-      <form action={signInWithPassword}>
+      <form>
         <input
           type="email"
           name="email"

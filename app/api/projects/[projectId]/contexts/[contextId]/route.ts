@@ -23,8 +23,8 @@ export async function DELETE(_req: Request, { params }: { params: { projectId: s
       .maybeSingle();
     const openai = getOpenAI();
     if (project?.openai_vector_store_id && ctx.openai_file_id) {
-      try { await openai.vectorStores.files.del(project.openai_vector_store_id, ctx.openai_file_id); } catch {}
-      try { await openai.files.del(ctx.openai_file_id); } catch {}
+      try { await openai.vectorStores.files.delete(project.openai_vector_store_id, ctx.openai_file_id); } catch {}
+      try { await openai.files.delete(ctx.openai_file_id); } catch {}
     }
     await supabase.from('contexts').update({ status: 'deleted' }).eq('id', params.contextId);
     return NextResponse.json({ ok: true });

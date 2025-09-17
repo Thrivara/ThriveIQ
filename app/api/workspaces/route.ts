@@ -19,6 +19,7 @@ export async function GET() {
 export async function POST(req: Request) {
   const supabase = createSupabaseServerClient();
   const { data: auth } = await supabase.auth.getUser();
+  const email = auth?.user?.email ?? null;
   const userId = auth?.user?.id;
   if (!userId) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
 
@@ -29,7 +30,7 @@ export async function POST(req: Request) {
     .eq('id', userId)
     .maybeSingle();
   if (!existingUser) {
-    await supabase.from('users').insert({ id: userId, email: auth.user.email });
+    await supabase.from('users').insert({ id: userId, email });
   }
 
   const body = await req.json();
