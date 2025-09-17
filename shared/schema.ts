@@ -61,6 +61,7 @@ export const projects = pgTable("projects", {
   defaultTemplateId: uuid("default_template_id"),
   llmProviderConfig: jsonb("llm_provider_config"),
   openaiVectorStoreId: varchar("openai_vector_store_id"),
+  guardrails: text("guardrails"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

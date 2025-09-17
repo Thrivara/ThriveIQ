@@ -352,9 +352,8 @@ Rules
 - Keep explanations precise, concise, and professional.
 - Always include the Role-Goal-Reason as the first line of the description.
 - Replace every '<List here>' placeholder with concrete details derived from the work item, templates, and context. Never leave placeholders in the output.
-- Always include the standard engineering tasks PR Review, Dev Testing, and QA Handoff in addition to any context-specific tasks.
 
-Platform Guardrails (Project-Specific)
+  Platform Guardrails (Project-Specific)
 ${projectGuardrails}
 `;
 
