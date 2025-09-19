@@ -23,6 +23,8 @@ export const integrationTypeEnum = pgEnum("integration_type", ["jira", "azure_de
 export const sourceTypeEnum = pgEnum("source_type", ["upload", "confluence", "sharepoint"]);
 export const runStatusEnum = pgEnum("run_status", ["pending", "running", "completed", "failed"]);
 export const itemStatusEnum = pgEnum("item_status", ["pending", "generated", "applied", "rejected"]);
+export const templateStatusEnum = pgEnum("template_status", ["active", "archived"]);
+export const templateVersionStatusEnum = pgEnum("template_version_status", ["draft", "published"]);
 
 // Core tables
 export const users = pgTable("users", {
@@ -83,18 +85,67 @@ export const integrations = pgTable("integrations", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-export const templates = pgTable("templates", {
-  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-  name: varchar("name", { length: 255 }).notNull(),
-  description: text("description"),
-  body: text("body").notNull(),
-  variables: jsonb("variables"),
-  version: integer("version").default(1),
-  isActive: boolean("is_active").default(true),
-  createdAt: timestamp("created_at").defaultNow(),
-  updatedAt: timestamp("updated_at").defaultNow(),
-});
+export const templates = pgTable(
+  "templates",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    name: varchar("name", { length: 255 }).notNull(),
+    description: text("description"),
+    latestVersionId: uuid("latest_version_id"),
+    status: templateStatusEnum("status").notNull().default("active"),
+    createdBy: uuid("created_by").references(() => users.id),
+    updatedBy: uuid("updated_by").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  table => ({
+    idxTemplatesProjectName: uniqueIndex("templates_project_id_name_active_idx")
+      .on(table.projectId, table.name)
+      .where(sql`${table.status} = 'active'`),
+    idxTemplatesProjectStatus: index("templates_project_status_idx").on(table.projectId, table.status),
+  })
+);
+
+export const templateVersions = pgTable(
+  "template_versions",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    templateId: uuid("template_id").notNull().references(() => templates.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    status: templateVersionStatusEnum("status").notNull().default("draft"),
+    body: text("body").notNull(),
+    variablesJson: jsonb("variables_json").notNull().default(sql`'[]'::jsonb`),
+    examplePayloadJson: jsonb("example_payload_json"),
+    publishedAt: timestamp("published_at"),
+    publishedBy: uuid("published_by").references(() => users.id),
+    createdBy: uuid("created_by").references(() => users.id),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  table => ({
+    templateVersionIdx: uniqueIndex("template_versions_template_version_idx").on(table.templateId, table.version),
+    templateStatusIdx: index("template_versions_status_idx").on(table.templateId, table.status),
+  })
+);
+
+export const templateAudit = pgTable(
+  "template_audit",
+  {
+    id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+    projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    templateId: uuid("template_id").references(() => templates.id, { onDelete: "cascade" }),
+    templateVersionId: uuid("template_version_id").references(() => templateVersions.id, { onDelete: "cascade" }),
+    actorUserId: uuid("actor_user_id").notNull().references(() => users.id),
+    action: text("action").notNull(),
+    detailsJson: jsonb("details_json"),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  table => ({
+    auditTemplateIdx: index("template_audit_template_idx").on(table.templateId),
+    auditVersionIdx: index("template_audit_version_idx").on(table.templateVersionId),
+    auditProjectIdx: index("template_audit_project_idx").on(table.projectId),
+  })
+);
 
 export const contexts = pgTable("contexts", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -127,6 +178,8 @@ export const runs = pgTable("runs", {
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   templateId: uuid("template_id").references(() => templates.id),
+  templateVersionId: uuid("template_version_id").references(() => templateVersions.id),
+  templateVersionNumber: integer("template_version"),
   provider: varchar("provider"),
   model: varchar("model"),
   status: runStatusEnum("status").default("pending"),
@@ -211,7 +264,23 @@ export const integrationsRelations = relations(integrations, ({ one }) => ({
 
 export const templatesRelations = relations(templates, ({ one, many }) => ({
   project: one(projects, { fields: [templates.projectId], references: [projects.id] }),
+  latestVersion: one(templateVersions, { fields: [templates.latestVersionId], references: [templateVersions.id] }),
+  versions: many(templateVersions),
+  auditEntries: many(templateAudit),
   runs: many(runs),
+}));
+
+export const templateVersionsRelations = relations(templateVersions, ({ one, many }) => ({
+  template: one(templates, { fields: [templateVersions.templateId], references: [templates.id] }),
+  auditEntries: many(templateAudit),
+  runs: many(runs),
+}));
+
+export const templateAuditRelations = relations(templateAudit, ({ one }) => ({
+  project: one(projects, { fields: [templateAudit.projectId], references: [projects.id] }),
+  template: one(templates, { fields: [templateAudit.templateId], references: [templates.id] }),
+  templateVersion: one(templateVersions, { fields: [templateAudit.templateVersionId], references: [templateVersions.id] }),
+  actor: one(users, { fields: [templateAudit.actorUserId], references: [users.id] }),
 }));
 
 export const contextsRelations = relations(contexts, ({ one, many }) => ({
@@ -227,6 +296,7 @@ export const runsRelations = relations(runs, ({ one, many }) => ({
   user: one(users, { fields: [runs.userId], references: [users.id] }),
   project: one(projects, { fields: [runs.projectId], references: [projects.id] }),
   template: one(templates, { fields: [runs.templateId], references: [templates.id] }),
+  templateVersion: one(templateVersions, { fields: [runs.templateVersionId], references: [templateVersions.id] }),
   items: many(runItems),
 }));
 
@@ -285,8 +355,29 @@ export const insertTemplateSchema = createInsertSchema(templates).pick({
   projectId: true,
   name: true,
   description: true,
+  createdBy: true,
+  updatedBy: true,
+});
+
+export const insertTemplateVersionSchema = createInsertSchema(templateVersions).pick({
+  templateId: true,
+  version: true,
+  status: true,
   body: true,
-  variables: true,
+  variablesJson: true,
+  examplePayloadJson: true,
+  publishedAt: true,
+  publishedBy: true,
+  createdBy: true,
+});
+
+export const insertTemplateAuditSchema = createInsertSchema(templateAudit).pick({
+  projectId: true,
+  templateId: true,
+  templateVersionId: true,
+  actorUserId: true,
+  action: true,
+  detailsJson: true,
 });
 
 export const insertContextSchema = createInsertSchema(contexts).pick({
@@ -302,6 +393,8 @@ export const insertContextSchema = createInsertSchema(contexts).pick({
 export const insertRunSchema = createInsertSchema(runs).pick({
   projectId: true,
   templateId: true,
+  templateVersionId: true,
+  templateVersionNumber: true,
   provider: true,
   model: true,
   contextRefs: true,
@@ -322,6 +415,8 @@ export type Project = typeof projects.$inferSelect;
 export type ProjectStatus = (typeof projectStatusValues)[number];
 export type Integration = typeof integrations.$inferSelect;
 export type Template = typeof templates.$inferSelect;
+export type TemplateVersion = typeof templateVersions.$inferSelect;
+export type TemplateAudit = typeof templateAudit.$inferSelect;
 export type Context = typeof contexts.$inferSelect;
 export type ContextChunk = typeof contextChunks.$inferSelect;
 export type Run = typeof runs.$inferSelect;
@@ -334,6 +429,8 @@ export type InsertWorkspaceMember = z.infer<typeof insertWorkspaceMemberSchema>;
 export type InsertProject = z.infer<typeof insertProjectSchema>;
 export type InsertIntegration = z.infer<typeof insertIntegrationSchema>;
 export type InsertTemplate = z.infer<typeof insertTemplateSchema>;
+export type InsertTemplateVersion = z.infer<typeof insertTemplateVersionSchema>;
+export type InsertTemplateAudit = z.infer<typeof insertTemplateAuditSchema>;
 export type InsertContext = z.infer<typeof insertContextSchema>;
 export type InsertRun = z.infer<typeof insertRunSchema>;
 export type InsertSecret = z.infer<typeof insertSecretSchema>;

@@ -209,6 +209,37 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
     .maybeSingle();
   if (!project) return NextResponse.json({ message: 'Project not found' }, { status: 404 });
 
+  let templateContainer: Record<string, unknown> | null = null;
+  let templateVersion: Record<string, unknown> | null = null;
+  if (templateId) {
+    const { data: container, error: templateError } = await supabase
+      .from('templates')
+      .select('*')
+      .eq('id', templateId)
+      .eq('project_id', params.projectId)
+      .maybeSingle();
+    if (templateError) return NextResponse.json({ message: templateError.message }, { status: 500 });
+    if (!container) return NextResponse.json({ message: 'Template not found' }, { status: 404 });
+    if (container.status === 'archived') {
+      return NextResponse.json({ message: 'Archived templates cannot be used for generation' }, { status: 400 });
+    }
+
+    const { data: publishedVersion, error: versionError } = await supabase
+      .from('template_versions')
+      .select('*')
+      .eq('template_id', templateId)
+      .eq('status', 'published')
+      .order('version', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (versionError) return NextResponse.json({ message: versionError.message }, { status: 500 });
+    if (!publishedVersion) {
+      return NextResponse.json({ message: 'Template must have a published version before generating' }, { status: 400 });
+    }
+    templateContainer = container;
+    templateVersion = publishedVersion;
+  }
+
   // Default project tech guardrails (DB can override via projects.guardrails)
   const DEFAULT_GUARDRAILS = `
   Allowed / Primary Platforms:
@@ -234,6 +265,8 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
       user_id: user.id,
       project_id: params.projectId,
       template_id: templateId ?? null,
+      template_version_id: templateVersion?.id ?? null,
+      template_version: templateVersion?.version ?? null,
       provider: 'openai',
       model: 'gpt-4o',
       status: 'pending',
@@ -254,11 +287,16 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
   }
 
   // Optional: load template + contexts once
-  let template: any = null;
-  if (templateId) {
-    const { data: t } = await supabase.from('templates').select('*').eq('id', templateId).maybeSingle();
-    template = t || null;
-  }
+  const template: any = templateContainer
+    ? {
+        ...templateContainer,
+        body: templateVersion?.body,
+        variables_json: templateVersion?.variables_json,
+        version: templateVersion?.version,
+      }
+    : null;
+
+    console.log('Using template', template ? { id: template.id, name: template.name, version: template.version } : null);
   let selectedContexts: any[] = [];
   if (contextIds.length) {
     const { data: ctxs } = await supabase
@@ -370,10 +408,16 @@ ${projectGuardrails}
             fallbackContext = raw.map((t) => clip(t, 1500));
           }
 
+          // Build system prompt: prefer selected template; otherwise use default system prompt
+          const defaultSys = sys;
+          const templateText = (template?.body || '').toString().trim();
+          const sysForGeneration = templateText
+            ? `${templateText}\n\nPlatform Guardrails (Project-Specific)\n${projectGuardrails}`
+            : defaultSys;
+
           const userPayload = {
             project: { id: params.projectId, name: project.name },
             workItemPlain: beforeText,
-            template: template ? { name: clip(template.name, 120), body: clip(template.body, 3500) } : null,
             selectedContextFiles: contextNames.slice(0, 10).map((n) => clip(n, 200)),
             fallbackContext,
           };
@@ -385,7 +429,7 @@ ${projectGuardrails}
             tmplChars: template ? (template.body || '').length : 0,
             fallbackChunks: userPayload.fallbackContext.length,
             fallbackTotalChars: userPayload.fallbackContext.reduce((a, b) => a + b.length, 0),
-            approxPromptTokens: approxTokens(JSON.stringify({ sys, userPayload })),
+            approxPromptTokens: approxTokens(JSON.stringify({ sys: sysForGeneration, userPayload })),
           });
 
           // ---------- Phase 1: Retrieval-only micro call (one search, then stop) ----------
@@ -393,7 +437,7 @@ ${projectGuardrails}
           let retrievalSummary: string = '';
           if (useVectorStore) {
             try {
-              const retrieval = await callWithRetry(
+              const retrieval: any = await callWithRetry<any>(
                 () => (openai.responses.create as any)({
                   model: 'gpt-4o-mini',
                   input: [
@@ -477,13 +521,13 @@ ${projectGuardrails}
           }
 
           // ---------- Phase 2: Generation-only (no tools) ----------
-          const response = await callWithRetry(
+          const response: any = await callWithRetry<any>(
             () => (openai.responses.create as any)({
               model: 'gpt-4o-mini',
               input: [
                 {
                   role: 'system',
-                  content: [{ type: 'input_text', text: sys }],
+                  content: [{ type: 'input_text', text: sysForGeneration }],
                 },
                 {
                   role: 'user',
@@ -518,7 +562,7 @@ ${projectGuardrails}
           console.log('OpenAI generation response', JSON.stringify(response, null, 2));
 
           // Prefer structured outputs (.parsed) from the Phase 2 response
-          function extractParsed(r: any): any | null {
+          const extractParsed = (r: any): any | null => {
             try {
               const outputs = r?.output || [];
               for (const node of outputs) {
@@ -536,7 +580,7 @@ ${projectGuardrails}
 
           // Also try output_text as a final fallback
           if (!parsed) {
-            const txt = (response?.output_text || extractText(response) || '').toString();
+            const txt = ((response as any)?.output_text || extractText(response) || '').toString();
             try { parsed = JSON.parse(txt); } catch { parsed = null; }
           }
 
@@ -566,29 +610,25 @@ ${projectGuardrails}
             }
           }
 
-          // Normalize Implementation Notes to foreground project guardrails (dynamic)
+          // Normalize Implementation Notes: only override if empty
           const implNotes = Array.isArray(json.implementationNotes) ? json.implementationNotes : [];
-          const { allowed: allowedStack, principles: principleLines } = parseGuardrailsSections(projectGuardrails);
-          const preferredNotes: string[] = [];
-
-          // Add principles first (shortened)
-          for (const p of principleLines.slice(0, 3)) {
-            const note = p.endsWith('.') ? p : `${p}.`;
-            preferredNotes.push(note);
-          }
-          // Then add allowed platforms/tools as guidance
-          for (const a of allowedStack.slice(0, 5)) {
-            const note = a.endsWith('.') ? a : `${a}.`;
-            if (!preferredNotes.includes(note)) preferredNotes.push(note);
-          }
-          // Prepend any missing preferred notes
-          for (let i = preferredNotes.length - 1; i >= 0; i--) {
-            const n = preferredNotes[i];
-            if (!implNotes.some((x) => x.toLowerCase() === n.toLowerCase())) {
-              implNotes.unshift(n);
+          if (implNotes.length === 0) {
+            const { allowed: allowedStack, principles: principleLines } = parseGuardrailsSections(projectGuardrails);
+            const preferredNotes: string[] = [];
+            // Add principles first (shortened)
+            for (const p of principleLines.slice(0, 3)) {
+              const note = p.endsWith('.') ? p : `${p}.`;
+              preferredNotes.push(note);
             }
+            // Then add allowed platforms/tools as guidance
+            for (const a of allowedStack.slice(0, 5)) {
+              const note = a.endsWith('.') ? a : `${a}.`;
+              if (!preferredNotes.includes(note)) preferredNotes.push(note);
+            }
+            json.implementationNotes = preferredNotes;
+          } else {
+            json.implementationNotes = implNotes;
           }
-          json.implementationNotes = implNotes;
 
           // --- The rest of your transformation to ADO fields (unchanged below this line) ---
           let roleGoalReason = json.roleGoalReason as string | null | undefined;

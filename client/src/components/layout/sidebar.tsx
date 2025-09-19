@@ -1,3 +1,4 @@
+
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
@@ -14,6 +15,13 @@ import {
   MoreHorizontal,
 } from "lucide-react";
 
+type AuthUser = {
+  profileImageUrl?: string;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+};
+
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Projects", href: "/projects", icon: Kanban },
@@ -26,7 +34,7 @@ const navigation = [
 
 export default function Sidebar() {
   const [location] = useLocation();
-  const { user } = useAuth();
+  const { user } = useAuth() as { user?: AuthUser };
 
   return (
     <div className="hidden md:flex md:w-64 md:flex-col">

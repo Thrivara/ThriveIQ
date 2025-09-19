@@ -228,7 +228,7 @@ export class DatabaseStorage implements IStorage {
     return await db
       .select()
       .from(templates)
-      .where(and(eq(templates.projectId, projectId), eq(templates.isActive, true)))
+      .where(and(eq(templates.projectId, projectId), eq(templates.status, 'active')))
       .orderBy(asc(templates.name));
   }
 
@@ -238,16 +238,19 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createTemplate(template: InsertTemplate): Promise<Template> {
-    const [newTemplate] = await db.insert(templates).values(template).returning();
+    const [newTemplate] = (await db
+      .insert(templates)
+      .values({ ...template, status: 'active' })
+      .returning()) as Template[];
     return newTemplate;
   }
 
   async updateTemplate(templateId: string, updates: Partial<InsertTemplate>): Promise<Template> {
-    const [updatedTemplate] = await db
+    const [updatedTemplate] = (await db
       .update(templates)
       .set({ ...updates, updatedAt: new Date() })
       .where(eq(templates.id, templateId))
-      .returning();
+      .returning()) as Template[];
     return updatedTemplate;
   }
 

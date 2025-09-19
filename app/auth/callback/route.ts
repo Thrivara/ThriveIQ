@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
   });
 
   // This will exchange the code for a session and set the auth cookies.
-  await supabase.auth.exchangeCodeForSession(nextUrl);
+  await supabase.auth.exchangeCodeForSession(nextUrl.toString());
 
   return response;
 }

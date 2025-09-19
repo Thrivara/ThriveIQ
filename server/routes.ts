@@ -577,7 +577,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         } catch (error) {
           console.error(`Error applying item ${item.id}:`, error);
           await storage.updateRunItem(item.id, { status: 'rejected' });
-          results.push({ itemId: item.id, success: false, error: error.message });
+          const message = error instanceof Error ? error.message : String(error);
+          results.push({ itemId: item.id, success: false, error: message });
         }
       }
 
