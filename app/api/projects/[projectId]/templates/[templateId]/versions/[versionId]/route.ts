@@ -90,7 +90,7 @@ export async function PUT(req: Request, { params }: { params: { projectId: strin
       );
     }
 
-    const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    const updates: Record<string, unknown> = {};
     if (payload.body !== undefined) updates.body = payload.body;
     if (payload.variables !== undefined) updates.variables_json = payload.variables;
     if (payload.examplePayload !== undefined) updates.example_payload_json = payload.examplePayload;

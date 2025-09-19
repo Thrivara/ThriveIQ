@@ -106,7 +106,7 @@ function TemplateVariablesEditor({
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4 md:space-y-5">
       <div className="flex items-center justify-between">
         <h4 className="text-sm font-medium">Variables</h4>
         <Button
@@ -306,6 +306,7 @@ function TemplateList({
   onViewHistory,
   loading,
   busy,
+  view,
 }: {
   templates: TemplateSummary[];
   onEdit: (template: TemplateSummary) => void;
@@ -315,6 +316,7 @@ function TemplateList({
   onViewHistory: (template: TemplateSummary) => void;
   loading: boolean;
   busy: boolean;
+  view?: ViewValue;
 }) {
   if (loading) {
     return (
@@ -344,8 +346,8 @@ function TemplateList({
           ? formatDistanceToNow(new Date(template.updatedAt), { addSuffix: true })
           : 'Recently';
         return (
-          <Card key={template.id} className="border-muted">
-            <CardContent className="p-4">
+          <Card key={template.id} className="border-muted shadow-sm">
+            <CardContent className="p-5 md:p-6">
               <div className="flex flex-wrap gap-4 items-start justify-between">
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
@@ -362,15 +364,13 @@ function TemplateList({
                   {template.description && (
                     <p className="text-sm text-muted-foreground max-w-2xl">{template.description}</p>
                   )}
-                  <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                    {publishedVersion && (
-                      <span>Published v{publishedVersion.version}</span>
-                    )}
-                    {draftVersion && <span>Draft v{draftVersion.version}</span>}
+                  <div className="flex flex-wrap gap-2 text-xs text-muted-foreground mt-1">
+                    {publishedVersion && <span>Published v{publishedVersion.version}</span>}
+                    {draftVersion && view !== 'published' && <span>Draft v{draftVersion.version}</span>}
                     <span>Updated {updatedRelative}</span>
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 mt-2 md:mt-0">
                   <Button variant="outline" size="sm" onClick={() => onViewHistory(template)} disabled={busy}>
                     <History className="h-4 w-4 mr-1" /> Versions
                   </Button>
@@ -681,19 +681,19 @@ export default function Templates() {
           <CardHeader className="pb-2">
             <CardTitle className="text-lg">Template Management</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4 pt-4">
             <Tabs value={view} onValueChange={(value) => setView(value as ViewValue)}>
-              <TabsList>
+              <TabsList className="mb-3">
                 {VIEWS.map(tab => (
                   <TabsTrigger key={tab.value} value={tab.value}>
                     {tab.label}
                   </TabsTrigger>
                 ))}
               </TabsList>
-              <div className="flex flex-wrap items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3 mt-1 mb-2">
                 <Input
                   placeholder="Search templates"
-                  className="max-w-sm"
+                  className="w-full max-w-md"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                 />
@@ -715,6 +715,7 @@ export default function Templates() {
                     archiveTemplate.isPending ||
                     duplicateDraft.isPending
                   }
+                  view={view}
                 />
               </TabsContent>
             </Tabs>

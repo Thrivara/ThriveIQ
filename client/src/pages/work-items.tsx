@@ -312,7 +312,7 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
       return res.json();
     }
   });
-  const templatesQ = useQuery<{ id: string; name: string; version?: number }[]>({
+  const templatesQ = useQuery<{ id: string; name: string; version: number }[]>({
     queryKey: ['/api/projects', projectId, 'templates', 'published'],
     enabled: !!projectId,
     queryFn: async () => {
@@ -321,11 +321,10 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
       if (!res.ok) throw new Error(await res.text());
       const json = await res.json();
       const items: any[] = json?.items ?? [];
-      return items.map(item => ({
-        id: item.id,
-        name: item.name,
-        version: item.publishedVersion?.version ?? item.latestVersion?.version ?? null,
-      }));
+      // Only include published versions in the modal
+      return items
+        .filter(item => item.publishedVersion?.version != null)
+        .map(item => ({ id: item.id, name: item.name, version: item.publishedVersion.version }));
     }
   });
   const contextsQ = useQuery<ProjectContext[]>({

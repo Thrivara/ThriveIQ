@@ -31,7 +31,7 @@ export async function resolveProjectAccess(
 ): Promise<ProjectAccessContext> {
   const { data: project, error: projectError } = await supabase
     .from('projects')
-    .select('id, workspace_id, status')
+    .select('id, workspace_id')
     .eq('id', projectId)
     .maybeSingle();
 
@@ -86,6 +86,7 @@ export const variablesSchema = z
 
 export const examplePayloadSchema = z
   .record(z.any())
+  .nullable()
   .optional()
   .transform(value => (value === undefined ? null : value));
 

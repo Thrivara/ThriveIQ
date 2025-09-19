@@ -295,6 +295,8 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
         version: templateVersion?.version,
       }
     : null;
+
+    console.log('Using template', template ? { id: template.id, name: template.name, version: template.version } : null);
   let selectedContexts: any[] = [];
   if (contextIds.length) {
     const { data: ctxs } = await supabase
@@ -406,10 +408,16 @@ ${projectGuardrails}
             fallbackContext = raw.map((t) => clip(t, 1500));
           }
 
+          // Build system prompt: prefer selected template; otherwise use default system prompt
+          const defaultSys = sys;
+          const templateText = (template?.body || '').toString().trim();
+          const sysForGeneration = templateText
+            ? `${templateText}\n\nPlatform Guardrails (Project-Specific)\n${projectGuardrails}`
+            : defaultSys;
+
           const userPayload = {
             project: { id: params.projectId, name: project.name },
             workItemPlain: beforeText,
-            template: template ? { name: clip(template.name, 120), body: clip(template.body, 3500) } : null,
             selectedContextFiles: contextNames.slice(0, 10).map((n) => clip(n, 200)),
             fallbackContext,
           };
@@ -421,7 +429,7 @@ ${projectGuardrails}
             tmplChars: template ? (template.body || '').length : 0,
             fallbackChunks: userPayload.fallbackContext.length,
             fallbackTotalChars: userPayload.fallbackContext.reduce((a, b) => a + b.length, 0),
-            approxPromptTokens: approxTokens(JSON.stringify({ sys, userPayload })),
+            approxPromptTokens: approxTokens(JSON.stringify({ sys: sysForGeneration, userPayload })),
           });
 
           // ---------- Phase 1: Retrieval-only micro call (one search, then stop) ----------
@@ -519,7 +527,7 @@ ${projectGuardrails}
               input: [
                 {
                   role: 'system',
-                  content: [{ type: 'input_text', text: sys }],
+                  content: [{ type: 'input_text', text: sysForGeneration }],
                 },
                 {
                   role: 'user',

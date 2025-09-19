@@ -31,7 +31,7 @@ export async function GET(_req: Request, { params }: { params: { projectId: stri
 
     const { data, error } = await supabase
       .from('templates')
-      .select('*, versions:template_versions(*)')
+      .select('*, versions:template_versions!template_versions_template_id_fkey(*)')
       .eq('project_id', params.projectId)
       .eq('id', params.templateId)
       .maybeSingle();

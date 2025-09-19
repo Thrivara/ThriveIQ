@@ -42,7 +42,7 @@ export async function GET(req: Request, { params }: { params: { projectId: strin
     let base = supabase
       .from('templates')
       .select(
-        `*, latest_version:template_versions!templates_latest_version_fk(*), versions:template_versions(status, id, version, created_at, published_at)`,
+        `*, latest_version:template_versions!templates_latest_version_fk(*), versions:template_versions!template_versions_template_id_fkey(status, id, version, created_at, published_at, body, variables_json, example_payload_json)`,
         { count: 'exact' },
       )
       .eq('project_id', params.projectId)
