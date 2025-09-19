@@ -1,0 +1,153 @@
+import { useEffect } from "react";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import type { ProjectStatusFilter } from "@/hooks/useProjectFilters";
+
+const projectSchema = z.object({
+  name: z.string().min(1, "Project name is required").max(255),
+  description: z
+    .string()
+    .max(2000, "Description must be under 2000 characters")
+    .optional()
+    .or(z.literal(""))
+    .nullable(),
+  status: z.enum(["active", "planning", "review", "archived"]),
+});
+
+export type ProjectFormValues = z.infer<typeof projectSchema>;
+
+interface ProjectEditorDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: (values: ProjectFormValues) => Promise<void>;
+  isSubmitting?: boolean;
+  project?: {
+    name: string;
+    description: string | null;
+    status: ProjectStatusFilter;
+  } | null;
+}
+
+export function ProjectEditorDialog({
+  open,
+  onOpenChange,
+  onSubmit,
+  isSubmitting,
+  project,
+}: ProjectEditorDialogProps) {
+  const form = useForm<ProjectFormValues>({
+    resolver: zodResolver(projectSchema),
+    defaultValues: {
+      name: "",
+      description: "",
+      status: "active",
+    },
+  });
+
+  useEffect(() => {
+    if (open) {
+      form.reset({
+        name: project?.name ?? "",
+        description: project?.description ?? "",
+        status: (project?.status ?? "active") as ProjectFormValues["status"],
+      });
+    }
+  }, [form, open, project]);
+
+  const handleSubmit = async (values: ProjectFormValues) => {
+    await onSubmit(values);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{project ? "Edit Project" : "New Project"}</DialogTitle>
+        </DialogHeader>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Project Name</FormLabel>
+                  <FormControl>
+                    <Input placeholder="Enter project name" {...field} disabled={isSubmitting} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="description"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Description</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      placeholder="Add a short summary"
+                      className="min-h-[100px]"
+                      value={field.value ?? ""}
+                      onChange={(event) => field.onChange(event.target.value)}
+                      disabled={isSubmitting}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="status"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Status</FormLabel>
+                  <Select value={field.value} onValueChange={field.onChange} disabled={isSubmitting}>
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select a status" />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value="active">Active</SelectItem>
+                      <SelectItem value="planning">Planning</SelectItem>
+                      <SelectItem value="review">In Review</SelectItem>
+                      <SelectItem value="archived">Archived</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isSubmitting}>
+                {project ? "Save Changes" : "Create Project"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </Form>
+      </DialogContent>
+    </Dialog>
+  );
+}
