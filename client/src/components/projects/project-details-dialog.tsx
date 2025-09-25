@@ -46,6 +46,15 @@ interface ProjectDetailResponse {
       createdAt: string | null;
       metadata: Record<string, unknown> | null;
     }>;
+    teamMembers: Array<{
+      userId: string;
+      user: {
+        id: string;
+        email: string | null;
+        firstName: string | null;
+        lastName: string | null;
+      } | null;
+    }>;
   };
   audit: Array<{
     id: string;
@@ -156,6 +165,33 @@ export function ProjectDetailsDialog({ open, onOpenChange, projectId, workspaceI
                   }
                 />
               </div>
+
+              <section>
+                <h4 className="text-sm font-semibold text-foreground">Team</h4>
+                <div className="mt-2">
+                  {data.project.teamMembers && data.project.teamMembers.length > 0 ? (
+                    <ul className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {data.project.teamMembers.map((m) => {
+                        const name = m.user
+                          ? (m.user.firstName || m.user.lastName)
+                            ? `${m.user.firstName ?? ''} ${m.user.lastName ?? ''}`.trim()
+                            : m.user.email ?? m.user.id
+                          : m.userId;
+                        return (
+                          <li key={m.userId} className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+                            <div className="h-6 w-6 rounded-full bg-muted flex items-center justify-center text-[10px] font-medium">
+                              {name.substring(0, 2).toUpperCase()}
+                            </div>
+                            <span className="truncate" title={name}>{name}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No team members assigned.</p>
+                  )}
+                </div>
+              </section>
 
               <section>
                 <h4 className="text-sm font-semibold text-foreground">Integrations</h4>

@@ -45,6 +45,15 @@ export interface ProjectDetail extends ProjectListItem {
     createdAt: string | null;
     metadata: Record<string, unknown> | null;
   }>;
+  teamMembers: Array<{
+    userId: string;
+    user: {
+      id: string;
+      email: string | null;
+      firstName: string | null;
+      lastName: string | null;
+    } | null;
+  }>;
 }
 
 export interface ProjectAuditEntry {
@@ -101,6 +110,7 @@ type RawProjectRow = {
   template_stats?: Array<{ count: number }> | null;
   context_stats?: Array<{ count: number }> | null;
   run_stats?: Array<{ count: number }> | null;
+  member_stats?: Array<{ count: number }> | null;
 };
 
 export async function getAuthContext() {
@@ -182,7 +192,7 @@ function toProjectItem(row: RawProjectRow): ProjectListItem {
     description: row.description,
     status: row.status,
     itemCount: row.item_count,
-    memberCount: row.member_count,
+    memberCount: (row.member_stats?.[0]?.count ?? null) ?? row.member_count,
     lastUpdated,
     ownerUserId: row.owner_user_id,
     tracker: {
@@ -282,7 +292,8 @@ export async function fetchWorkspaceProjects(
         integration_stats:integrations!integrations_project_id_projects_id_fk(count),
         template_stats:templates!templates_project_id_projects_id_fk(count),
         context_stats:contexts!contexts_project_id_projects_id_fk(count),
-        run_stats:runs!runs_project_id_projects_id_fk(count)
+        run_stats:runs!runs_project_id_projects_id_fk(count),
+        member_stats:project_members!project_members_project_id_projects_id_fk(count)
       `,
     )
     .eq('workspace_id', workspaceId)
@@ -319,7 +330,9 @@ export async function fetchProjectDetail(
         integration_stats:integrations!integrations_project_id_projects_id_fk(count),
         template_stats:templates!templates_project_id_projects_id_fk(count),
         context_stats:contexts!contexts_project_id_projects_id_fk(count),
-        run_stats:runs!runs_project_id_projects_id_fk(count)
+        run_stats:runs!runs_project_id_projects_id_fk(count),
+        member_stats:project_members!project_members_project_id_projects_id_fk(count),
+        team:project_members(user_id, users(id, email, first_name, last_name))
       `,
     )
     .eq('workspace_id', workspaceId)
@@ -344,6 +357,19 @@ export async function fetchProjectDetail(
       createdAt: integration.created_at ?? null,
       metadata: integration.metadata ?? null,
     })),
+    teamMembers: Array.isArray((data as any).team)
+      ? ((data as any).team as Array<{ user_id: string; users?: any }>).map((m) => ({
+          userId: m.user_id,
+          user: m.users
+            ? {
+                id: m.users.id,
+                email: m.users.email ?? null,
+                firstName: m.users.first_name ?? null,
+                lastName: m.users.last_name ?? null,
+              }
+            : null,
+        }))
+      : [],
   };
 }
 

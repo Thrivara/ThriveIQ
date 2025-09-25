@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import type { ProjectStatusFilter } from "@/hooks/useProjectFilters";
 
 const projectSchema = z.object({
@@ -32,13 +33,19 @@ export type ProjectFormValues = z.infer<typeof projectSchema>;
 interface ProjectEditorDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (values: ProjectFormValues) => Promise<void>;
+  onSubmit: (values: ProjectFormValues & { teamUserIds?: string[] }) => Promise<void>;
   isSubmitting?: boolean;
   project?: {
     name: string;
     description: string | null;
     status: ProjectStatusFilter;
   } | null;
+  members?: Array<{
+    userId: string;
+    role: string;
+    user: { id: string; email: string | null; firstName: string | null; lastName: string | null } | null;
+  }>;
+  initialTeamUserIds?: string[] | null;
 }
 
 export function ProjectEditorDialog({
@@ -47,6 +54,8 @@ export function ProjectEditorDialog({
   onSubmit,
   isSubmitting,
   project,
+  members = [],
+  initialTeamUserIds = null,
 }: ProjectEditorDialogProps) {
   const form = useForm<ProjectFormValues>({
     resolver: zodResolver(projectSchema),
@@ -67,8 +76,29 @@ export function ProjectEditorDialog({
     }
   }, [form, open, project]);
 
+  // Team selection state
+  const [teamSelection, setTeamSelection] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (open) {
+      const seed = new Set((initialTeamUserIds ?? []) as string[]);
+      setTeamSelection(seed);
+    }
+  }, [open, initialTeamUserIds]);
+
+  const handleToggleMember = (userId: string, checked: boolean | "indeterminate") => {
+    setTeamSelection((prev) => {
+      const next = new Set(prev);
+      if (checked === true) next.add(userId);
+      else next.delete(userId);
+      return next;
+    });
+  };
+
+  const selectedIds = useMemo(() => Array.from(teamSelection), [teamSelection]);
+
   const handleSubmit = async (values: ProjectFormValues) => {
-    await onSubmit(values);
+    await onSubmit({ ...values, teamUserIds: selectedIds });
   };
 
   return (
@@ -136,6 +166,31 @@ export function ProjectEditorDialog({
                 </FormItem>
               )}
             />
+
+            <div className="space-y-2">
+              <FormLabel>Team Members</FormLabel>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-auto rounded-md border p-2">
+                {members.length === 0 ? (
+                  <div className="text-sm text-muted-foreground px-2 py-1">No workspace members found.</div>
+                ) : (
+                  members.map((m) => {
+                    const label = m.user
+                      ? `${m.user.firstName ?? ''} ${m.user.lastName ?? ''}`.trim() || (m.user.email ?? m.user.id)
+                      : m.userId;
+                    return (
+                      <label key={m.userId} className="flex items-center gap-2 text-sm">
+                        <Checkbox
+                          checked={teamSelection.has(m.userId)}
+                          onCheckedChange={(c) => handleToggleMember(m.userId, c)}
+                          id={`m-${m.userId}`}
+                        />
+                        <span className="truncate" title={label}>{label}</span>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+            </div>
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>

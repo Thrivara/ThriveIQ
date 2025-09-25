@@ -11,6 +11,7 @@ import { ConfirmDialog } from "@/components/projects/confirm-dialog";
 import { ProjectsFiltersDialog } from "@/components/projects/projects-filters-dialog";
 import { ProjectDetailsDialog } from "@/components/projects/project-details-dialog";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
+import { Card, CardContent } from "@/components/ui/card";
 
 interface Workspace {
   id: string;
@@ -52,6 +53,7 @@ export default function Projects() {
   const [confirmAction, setConfirmAction] = useState<{ type: "archive" | "delete"; project: ProjectListItem } | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [detailProjectId, setDetailProjectId] = useState<string | null>(null);
+  const [editingTeamUserIds, setEditingTeamUserIds] = useState<string[] | null>(null);
 
   useEffect(() => {
     setSearchValue(filters.search);
@@ -109,7 +111,7 @@ export default function Projects() {
   });
 
   const createProject = useMutation({
-    mutationFn: async (values: ProjectFormValues) => {
+    mutationFn: async (values: ProjectFormValues & { teamUserIds?: string[] }) => {
       if (!workspaceId) throw new Error("Workspace required");
       const res = await fetch(`/api/workspaces/${workspaceId}/projects`, {
         method: "POST",
@@ -138,7 +140,7 @@ export default function Projects() {
   });
 
   const updateProject = useMutation({
-    mutationFn: async (values: ProjectFormValues & { id: string }) => {
+    mutationFn: async (values: ProjectFormValues & { id: string; teamUserIds?: string[] }) => {
       if (!workspaceId) throw new Error("Workspace required");
       const res = await fetch(`/api/workspaces/${workspaceId}/projects/${values.id}`, {
         method: "PUT",
@@ -212,7 +214,7 @@ export default function Projects() {
     },
   });
 
-  const handleSubmit = async (values: ProjectFormValues) => {
+  const handleSubmit = async (values: ProjectFormValues & { teamUserIds?: string[] }) => {
     try {
       if (editingProject) {
         await updateProject.mutateAsync({ ...values, id: editingProject.id });
@@ -302,39 +304,62 @@ export default function Projects() {
           </p>
         </div>
 
-        <ProjectsToolbar
-          searchValue={searchValue}
-          onSearchChange={setSearchValue}
-          status={filters.status}
-          onStatusChange={(value) => updateFilters({ status: value }, { resetPage: true })}
-          tracker={filters.tracker}
-          onTrackerChange={(value) => updateFilters({ tracker: value }, { resetPage: true })}
-          onOpenAdvancedFilters={() => setFiltersOpen(true)}
-          onNewProject={() => setEditorOpen(true)}
-          isCreating={createProject.isPending || updateProject.isPending}
-        />
+        <Card>
+          <CardContent className="p-4 md:p-6">
+            <ProjectsToolbar
+              searchValue={searchValue}
+              onSearchChange={setSearchValue}
+              status={filters.status}
+              onStatusChange={(value) => updateFilters({ status: value }, { resetPage: true })}
+              tracker={filters.tracker}
+              onTrackerChange={(value) => updateFilters({ tracker: value }, { resetPage: true })}
+              onOpenAdvancedFilters={() => setFiltersOpen(true)}
+              onNewProject={() => setEditorOpen(true)}
+              isCreating={createProject.isPending || updateProject.isPending}
+            />
+          </CardContent>
+        </Card>
 
         {projectsQuery.isError ? (
-          <div className="flex h-64 items-center justify-center rounded-md border border-dashed border-destructive/50 bg-destructive/5 text-sm text-destructive">
-            Failed to load projects.
-          </div>
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex h-40 items-center justify-center text-sm text-destructive">
+                Failed to load projects.
+              </div>
+            </CardContent>
+          </Card>
         ) : projectsQuery.isLoading ? (
-          <div className="flex h-64 items-center justify-center text-muted-foreground">
-            <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading projects…
-          </div>
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex h-40 items-center justify-center text-muted-foreground">
+                <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading projects…
+              </div>
+            </CardContent>
+          </Card>
         ) : (
-          <ProjectsTable
-            projects={projectsQuery.data?.items ?? []}
-            onViewDetails={(project) => setDetailProjectId(project.id)}
-            onEdit={(project) => {
-              setEditingProject(project);
-              setEditorOpen(true);
-            }}
-            onArchive={(project) => setConfirmAction({ type: "archive", project })}
-            onDelete={(project) => setConfirmAction({ type: "delete", project })}
-            archiveLoadingId={archiveProject.isPending ? confirmAction?.project.id ?? null : null}
-            deleteLoadingId={deleteProject.isPending ? confirmAction?.project.id ?? null : null}
-          />
+          <Card className="overflow-hidden">
+            <CardContent className="p-0">
+              <ProjectsTable
+                projects={projectsQuery.data?.items ?? []}
+                onViewDetails={(project) => setDetailProjectId(project.id)}
+                onEdit={(project) => {
+                  setEditingProject(project);
+                  // fetch current team for editor prefill
+                  if (workspaceId) {
+                    fetch(`/api/workspaces/${workspaceId}/projects/${project.id}/members`, { credentials: "include" })
+                      .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+                      .then((data) => setEditingTeamUserIds((data.members ?? []).map((m: any) => m.userId)))
+                      .catch(() => setEditingTeamUserIds([]));
+                  }
+                  setEditorOpen(true);
+                }}
+                onArchive={(project) => setConfirmAction({ type: "archive", project })}
+                onDelete={(project) => setConfirmAction({ type: "delete", project })}
+                archiveLoadingId={archiveProject.isPending ? confirmAction?.project.id ?? null : null}
+                deleteLoadingId={deleteProject.isPending ? confirmAction?.project.id ?? null : null}
+              />
+            </CardContent>
+          </Card>
         )}
 
         {renderPagination()}
@@ -344,10 +369,15 @@ export default function Projects() {
         open={isEditorOpen}
         onOpenChange={(openState) => {
           setEditorOpen(openState);
-          if (!openState) setEditingProject(null);
+          if (!openState) {
+            setEditingProject(null);
+            setEditingTeamUserIds(null);
+          }
         }}
         project={editingProject}
         onSubmit={handleSubmit}
+        members={membersQuery.data?.members ?? []}
+        initialTeamUserIds={editingProject ? editingTeamUserIds ?? [] : []}
         isSubmitting={createProject.isPending || updateProject.isPending}
       />
 

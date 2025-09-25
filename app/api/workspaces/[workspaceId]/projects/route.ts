@@ -25,6 +25,7 @@ const createProjectSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().max(2000).optional().nullable(),
   status: z.enum(['active', 'planning', 'review', 'archived']).optional(),
+  teamUserIds: z.array(z.string().uuid()).optional(),
 });
 
 export async function GET(request: Request, { params }: { params: { workspaceId: string } }) {
@@ -134,6 +135,17 @@ export async function POST(request: Request, { params }: { params: { workspaceId
     if (insertResult.error || !insertResult.data) {
       console.error('[projects] create error', insertResult.error);
       return NextResponse.json({ message: 'Failed to create project' }, { status: 500 });
+    }
+
+    // Optionally set initial team
+    const teamIds = (body.teamUserIds ?? []).filter(Boolean);
+    if (teamIds.length) {
+      const { error: teamErr } = await supabase
+        .from('project_members')
+        .insert(teamIds.map((uid) => ({ project_id: insertResult.data.id, user_id: uid })));
+      if (teamErr) {
+        console.error('[projects] set team on create error', teamErr);
+      }
     }
 
     const detail = await fetchProjectDetail(supabase, workspaceId, insertResult.data.id);

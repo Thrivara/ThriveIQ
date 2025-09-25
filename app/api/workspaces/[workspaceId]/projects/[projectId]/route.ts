@@ -15,6 +15,7 @@ const updateSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   description: z.string().max(2000).optional().nullable(),
   status: z.enum(['active', 'planning', 'review', 'archived']).optional(),
+  teamUserIds: z.array(z.string().uuid()).optional(),
 });
 
 export async function GET(
@@ -64,7 +65,7 @@ export async function PUT(
     const payload = await request.json().catch(() => ({}));
     const body = updateSchema.parse(payload);
 
-    if (!body.name && !body.description && !body.status) {
+    if (!body.name && !body.description && !body.status && !body.teamUserIds) {
       return NextResponse.json({ message: 'No updates provided' }, { status: 400 });
     }
 
@@ -120,6 +121,54 @@ export async function PUT(
       return NextResponse.json({ message: 'Failed to update project' }, { status: 500 });
     }
 
+    // Optionally replace team members
+    if (Array.isArray(body.teamUserIds)) {
+      // Validate users belong to workspace
+      const { data: wsUsers, error: wsErr } = await supabase
+        .from('workspace_members')
+        .select('user_id')
+        .eq('workspace_id', workspaceId);
+      if (wsErr) {
+        console.error('[project update] load workspace users error', wsErr);
+        return NextResponse.json({ message: 'Failed to validate team' }, { status: 500 });
+      }
+      const allowed = new Set((wsUsers ?? []).map((u: any) => u.user_id));
+      const desired = body.teamUserIds.filter((id) => allowed.has(id));
+
+      const { data: currentRows, error: currErr } = await supabase
+        .from('project_members')
+        .select('user_id')
+        .eq('project_id', projectId);
+      if (currErr) {
+        console.error('[project update] load current team error', currErr);
+        return NextResponse.json({ message: 'Failed to update team' }, { status: 500 });
+      }
+      const current = new Set((currentRows ?? []).map((r: any) => r.user_id));
+      const desiredSet = new Set(desired);
+      const toAdd = desired.filter((id) => !current.has(id));
+      const toRemove = [...current].filter((id) => !desiredSet.has(id));
+
+      if (toRemove.length) {
+        const { error: delErr } = await supabase
+          .from('project_members')
+          .delete()
+          .eq('project_id', projectId)
+          .in('user_id', toRemove);
+        if (delErr) {
+          console.error('[project update] team delete error', delErr);
+          return NextResponse.json({ message: 'Failed to update team' }, { status: 500 });
+        }
+      }
+      if (toAdd.length) {
+        const inserts = toAdd.map((uid) => ({ project_id: projectId, user_id: uid }));
+        const { error: insErr } = await supabase.from('project_members').insert(inserts);
+        if (insErr) {
+          console.error('[project update] team insert error', insErr);
+          return NextResponse.json({ message: 'Failed to update team' }, { status: 500 });
+        }
+      }
+    }
+
     const detail = await fetchProjectDetail(supabase, workspaceId, projectId);
     if (!detail) {
       return NextResponse.json({ message: 'Failed to load project' }, { status: 500 });
@@ -131,6 +180,7 @@ export async function PUT(
       changed.description = body.description ?? null;
     }
     if (body.status && body.status !== current.status) changed.status = body.status;
+    if (Array.isArray(body.teamUserIds)) changed.team = body.teamUserIds.length;
 
     await recordProjectAudit(supabase, {
       workspaceId,
