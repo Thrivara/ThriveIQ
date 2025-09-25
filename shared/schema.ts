@@ -29,7 +29,7 @@ export const templateVersionStatusEnum = pgEnum("template_version_status", ["dra
 
 // Core tables
 export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  id: uuid("id").primaryKey().defaultRandom(),
   email: varchar("email").unique(),
   firstName: varchar("first_name"),
   lastName: varchar("last_name"),
@@ -41,7 +41,7 @@ export const users = pgTable("users", {
 export const workspaces = pgTable("workspaces", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   name: varchar("name", { length: 255 }).notNull(),
-  ownerId: varchar("owner_id").notNull().references(() => users.id),
+  ownerId: uuid("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   billingInfo: jsonb("billing_info"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -50,20 +50,27 @@ export const workspaces = pgTable("workspaces", {
 export const workspaceMembers = pgTable("workspace_members", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
-  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   role: roleEnum("role").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+export const projectStatusValues = ["active", "planning", "review", "archived"] as const;
 
 export const projects = pgTable("projects", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   name: varchar("name", { length: 255 }).notNull(),
   description: text("description"),
+  status: text("status").notNull().default("active").$type<(typeof projectStatusValues)[number]>(),
   defaultTemplateId: uuid("default_template_id"),
   llmProviderConfig: jsonb("llm_provider_config"),
   openaiVectorStoreId: varchar("openai_vector_store_id"),
   guardrails: text("guardrails"),
+  itemCount: integer("item_count").notNull().default(0),
+  memberCount: integer("member_count").notNull().default(0),
+  lastUpdated: timestamp("last_updated", { withTimezone: true }).defaultNow(),
+  ownerUserId: uuid("owner_user_id").references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -169,7 +176,7 @@ export const contextChunks = pgTable("context_chunks", {
 
 export const runs = pgTable("runs", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  userId: varchar("user_id").notNull().references(() => users.id),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   templateId: uuid("template_id").references(() => templates.id),
   templateVersionId: uuid("template_version_id").references(() => templateVersions.id),
@@ -210,17 +217,29 @@ export const secrets = pgTable(
   ],
 );
 
+export const projectAudit = pgTable("project_audit", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }),
+  actorUserId: uuid("actor_user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  action: text("action").notNull(),
+  detailsJson: jsonb("details_json"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 // Relations
 export const usersRelations = relations(users, ({ many }) => ({
   workspaces: many(workspaces),
   workspaceMembers: many(workspaceMembers),
   runs: many(runs),
+  projectAudits: many(projectAudit),
 }));
 
 export const workspacesRelations = relations(workspaces, ({ one, many }) => ({
   owner: one(users, { fields: [workspaces.ownerId], references: [users.id] }),
   members: many(workspaceMembers),
   projects: many(projects),
+  projectAudits: many(projectAudit),
 }));
 
 export const workspaceMembersRelations = relations(workspaceMembers, ({ one }) => ({
@@ -231,11 +250,13 @@ export const workspaceMembersRelations = relations(workspaceMembers, ({ one }) =
 export const projectsRelations = relations(projects, ({ one, many }) => ({
   workspace: one(workspaces, { fields: [projects.workspaceId], references: [workspaces.id] }),
   defaultTemplate: one(templates, { fields: [projects.defaultTemplateId], references: [templates.id] }),
+  owner: one(users, { fields: [projects.ownerUserId], references: [users.id] }),
   integrations: many(integrations),
   templates: many(templates),
   contexts: many(contexts),
   runs: many(runs),
   secrets: many(secrets),
+  auditEntries: many(projectAudit),
 }));
 
 export const integrationsRelations = relations(integrations, ({ one }) => ({
@@ -288,6 +309,12 @@ export const secretsRelations = relations(secrets, ({ one }) => ({
   project: one(projects, { fields: [secrets.projectId], references: [projects.id] }),
 }));
 
+export const projectAuditRelations = relations(projectAudit, ({ one }) => ({
+  workspace: one(workspaces, { fields: [projectAudit.workspaceId], references: [workspaces.id] }),
+  project: one(projects, { fields: [projectAudit.projectId], references: [projects.id] }),
+  actor: one(users, { fields: [projectAudit.actorUserId], references: [users.id] }),
+}));
+
 // Insert schemas
 export const insertUserSchema = createInsertSchema(users).pick({
   email: true,
@@ -311,7 +338,11 @@ export const insertProjectSchema = createInsertSchema(projects).pick({
   workspaceId: true,
   name: true,
   description: true,
+  status: true,
+  ownerUserId: true,
   llmProviderConfig: true,
+}).extend({
+  status: z.enum(projectStatusValues).optional(),
 });
 
 export const insertIntegrationSchema = createInsertSchema(integrations).pick({
@@ -382,6 +413,7 @@ export type User = typeof users.$inferSelect;
 export type Workspace = typeof workspaces.$inferSelect;
 export type WorkspaceMember = typeof workspaceMembers.$inferSelect;
 export type Project = typeof projects.$inferSelect;
+export type ProjectStatus = (typeof projectStatusValues)[number];
 export type Integration = typeof integrations.$inferSelect;
 export type Template = typeof templates.$inferSelect;
 export type TemplateVersion = typeof templateVersions.$inferSelect;
@@ -391,6 +423,7 @@ export type ContextChunk = typeof contextChunks.$inferSelect;
 export type Run = typeof runs.$inferSelect;
 export type RunItem = typeof runItems.$inferSelect;
 export type Secret = typeof secrets.$inferSelect;
+export type ProjectAudit = typeof projectAudit.$inferSelect;
 
 export type InsertWorkspace = z.infer<typeof insertWorkspaceSchema>;
 export type InsertWorkspaceMember = z.infer<typeof insertWorkspaceMemberSchema>;
@@ -402,3 +435,4 @@ export type InsertTemplateAudit = z.infer<typeof insertTemplateAuditSchema>;
 export type InsertContext = z.infer<typeof insertContextSchema>;
 export type InsertRun = z.infer<typeof insertRunSchema>;
 export type InsertSecret = z.infer<typeof insertSecretSchema>;
+export type InsertProjectAudit = typeof projectAudit.$inferInsert;

@@ -1,4 +1,4 @@
-import { createSupabaseServerClient } from '@/../lib/supabase/server';
+import { createSupabaseServerClient } from 'lib/supabase/server';
 
 export async function seedInitialData() {
   const supabase = createSupabaseServerClient();
@@ -73,4 +73,3 @@ export async function seedInitialData() {
 
   return { userId: user.id, workspaceId: workspace!.id, projectId: defaultProjectId };
 }
-

@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
 import WorkspaceSelector from "@/components/workspace-selector";
 import {
   LayoutDashboard,
+  Kanban,
   ClipboardList,
   FileText,
   Folder,
@@ -23,6 +24,7 @@ type AuthUser = {
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
+  { name: "Projects", href: "/projects", icon: Kanban },
   { name: "Work Items", href: "/work-items", icon: ClipboardList },
   { name: "Templates", href: "/templates", icon: FileText },
   { name: "Context Files", href: "/context-files", icon: Folder },

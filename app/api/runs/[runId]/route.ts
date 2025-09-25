@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createSupabaseServerClient } from '@/../lib/supabase/server';
+import { createSupabaseServerClient } from 'lib/supabase/server';
 
 export async function GET(_req: Request, { params }: { params: { runId: string } }) {
   const supabase = createSupabaseServerClient();
@@ -15,4 +15,3 @@ export async function GET(_req: Request, { params }: { params: { runId: string }
   if (!data) return NextResponse.json({ message: 'Not found' }, { status: 404 });
   return NextResponse.json(data);
 }
-

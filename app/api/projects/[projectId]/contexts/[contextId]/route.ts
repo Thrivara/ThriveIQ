@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { createSupabaseServerClient } from '@/../lib/supabase/server';
-import { getOpenAI } from '@/../lib/openai/vectorStore';
+import { createSupabaseServerClient } from 'lib/supabase/server';
+import { getOpenAI } from 'lib/openai/vectorStore';
 
 export async function DELETE(_req: Request, { params }: { params: { projectId: string; contextId: string } }) {
   const supabase = createSupabaseServerClient();
@@ -32,4 +32,3 @@ export async function DELETE(_req: Request, { params }: { params: { projectId: s
     return NextResponse.json({ message: e.message }, { status: 500 });
   }
 }
-
