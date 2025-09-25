@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createSupabaseServerClient } from '@/../lib/supabase/server';
+import { createSupabaseServerClient } from 'lib/supabase/server';
 import OpenAI from 'openai';
 import { strict } from 'assert';
 
@@ -168,7 +168,7 @@ async function fetchAdoItemDetail(projectId: string, itemId: string, supabase: a
 
   let patRaw: string = secret.encrypted_value;
   if (process.env.APP_ENCRYPTION_KEY) {
-    const { decryptString } = await import('@/../lib/crypto');
+    const { decryptString } = await import('lib/crypto');
     patRaw = decryptString(patRaw);
   }
   const creds = typeof patRaw === 'string' ? JSON.parse(patRaw) : patRaw;

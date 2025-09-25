@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { createSupabaseServerClient } from '@/../lib/supabase/server';
-import { decryptString } from '@/../lib/crypto';
+import { createSupabaseServerClient } from 'lib/supabase/server';
+import { decryptString } from 'lib/crypto';
 
 export async function GET(_req: Request, { params }: { params: { projectId: string, source: string, itemId: string } }) {
   const supabase = createSupabaseServerClient();
@@ -61,4 +61,3 @@ export async function GET(_req: Request, { params }: { params: { projectId: stri
     return NextResponse.json({ message: `Network error: ${e.message}` }, { status: 500 });
   }
 }
-

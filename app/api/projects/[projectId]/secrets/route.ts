@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { createSupabaseServerClient } from '@/../lib/supabase/server';
-import { encryptString } from '@/../lib/crypto';
+import { createSupabaseServerClient } from 'lib/supabase/server';
+import { encryptString } from 'lib/crypto';
 
 export async function POST(req: Request, { params }: { params: { projectId: string } }) {
   const supabase = createSupabaseServerClient();

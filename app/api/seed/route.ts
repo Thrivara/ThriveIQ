@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { seedInitialData } from '@/../lib/db/seed';
+import { seedInitialData } from 'lib/db/seed';
 
 export async function POST() {
   try {
@@ -14,4 +14,3 @@ export async function POST() {
 
 // Convenience for local dev: allow GET to also trigger seeding
 export const GET = POST;
-

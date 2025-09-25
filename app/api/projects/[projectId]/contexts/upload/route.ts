@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { createSupabaseServerClient } from '@/../lib/supabase/server';
-import { ensureVectorStore, uploadFileToVectorStore } from '@/../lib/openai/vectorStore';
+import { createSupabaseServerClient } from 'lib/supabase/server';
+import { ensureVectorStore, uploadFileToVectorStore } from 'lib/openai/vectorStore';
 
 export async function POST(req: Request, { params }: { params: { projectId: string } }) {
   const supabase = createSupabaseServerClient();

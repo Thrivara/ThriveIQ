@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
-import { createSupabaseServerClient } from '@/../lib/supabase/server';
-import { getVectorFileStatus } from '@/../lib/openai/vectorStore';
+import { createSupabaseServerClient } from 'lib/supabase/server';
+import { getVectorFileStatus } from 'lib/openai/vectorStore';
 
 export async function GET(_req: Request, { params }: { params: { projectId: string; contextId: string } }) {
   const supabase = createSupabaseServerClient();
@@ -64,4 +64,3 @@ export async function GET(_req: Request, { params }: { params: { projectId: stri
     return NextResponse.json({ status: 'failed', error: e.message });
   }
 }
-

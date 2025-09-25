@@ -1,5 +1,5 @@
-import { createSupabaseServerClient } from '@/../lib/supabase/server';
-import type { ProjectStatus } from '@/../shared/schema';
+import { createSupabaseServerClient } from 'lib/supabase/server';
+import type { ProjectStatus } from '@shared/schema';
 import { NextResponse } from 'next/server';
 
 type WorkspaceRole = 'owner' | 'admin' | 'contributor' | 'viewer';
@@ -297,7 +297,7 @@ export async function fetchWorkspaceProjects(
       `,
     )
     .eq('workspace_id', workspaceId)
-    .order('last_updated', { ascending: false, nullsLast: true });
+    .order('last_updated', { ascending: false, nullsFirst: false });
 
   if (error) {
     console.error('[projects] fetchWorkspaceProjects error', error);
