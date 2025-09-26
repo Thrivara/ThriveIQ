@@ -1,6 +1,7 @@
 "use server";
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { cookies } from 'next/headers';
+import { provisionUser } from '@/../lib/auth/provision-user';
 
 function getServerClient() {
   const cookieStore = cookies();
@@ -57,8 +58,21 @@ export async function signUpWithPassword(formData: FormData) {
   const password = String(formData.get('password') || '');
   if (!email || !password) return { ok: false, error: 'Email and password required' } as const;
   const supabase = getServerClient();
-  const { error } = await supabase.auth.signUp({ email, password });
+  const { data, error } = await supabase.auth.signUp({ email, password });
   if (error) return { ok: false, error: error.message } as const;
+
+  const userId = data.user?.id;
+  if (userId) {
+    try {
+      await provisionUser({ userId, email: data.user?.email ?? email });
+    } catch (dbError: any) {
+      console.error('Failed to provision user workspace membership', dbError);
+      return {
+        ok: false,
+        error: 'Account created but user provisioning failed. Please contact support.',
+      } as const;
+    }
+  }
   return { ok: true } as const;
 }
 

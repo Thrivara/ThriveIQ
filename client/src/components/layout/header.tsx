@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import ThemeToggle from "@/components/theme-toggle";
-import { Bell, Sparkles } from "lucide-react";
+import { requestSignOut } from "@/lib/authUtils";
+import { Bell, LogOut, Sparkles } from "lucide-react";
 
 interface HeaderProps {
   title: string;
@@ -11,6 +13,20 @@ export default function Header({ title, description }: HeaderProps) {
   const handleNewGeneration = () => {
     // TODO: Implement new generation modal
     console.log("Starting new generation...");
+  };
+
+  const [isSigningOut, setIsSigningOut] = useState(false);
+
+  const handleSignOut = async () => {
+    if (isSigningOut) return;
+    try {
+      setIsSigningOut(true);
+      await requestSignOut();
+      window.location.href = "/login";
+    } catch (error) {
+      console.error("Failed to sign out", error);
+      setIsSigningOut(false);
+    }
   };
 
   return (
@@ -27,7 +43,20 @@ export default function Header({ title, description }: HeaderProps) {
         <div className="flex items-center space-x-3">
           {/* Theme Toggle */}
           <ThemeToggle />
-          
+
+          {/* Sign Out */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleSignOut}
+            className="px-2"
+            data-testid="button-header-sign-out"
+            disabled={isSigningOut}
+          >
+            <LogOut className="w-4 h-4" />
+            <span className="hidden sm:inline">{isSigningOut ? "Signing out" : "Sign out"}</span>
+          </Button>
+
           {/* Notifications */}
           <button 
             className="p-2 hover:bg-muted rounded-md relative transition-colors"

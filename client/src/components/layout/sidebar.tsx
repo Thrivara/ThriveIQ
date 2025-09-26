@@ -1,8 +1,11 @@
 
+import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { cn } from "@/lib/utils";
+import { requestSignOut } from "@/lib/authUtils";
 import { useAuth } from "@/hooks/useAuth";
 import WorkspaceSelector from "@/components/workspace-selector";
+import { Button } from "@/components/ui/button";
 import {
   LayoutDashboard,
   Kanban,
@@ -35,6 +38,19 @@ const navigation = [
 export default function Sidebar() {
   const [location] = useLocation();
   const { user } = useAuth() as { user?: AuthUser };
+  const [isSigningOut, setIsSigningOut] = useState(false);
+
+  const handleSignOut = async () => {
+    if (isSigningOut) return;
+    try {
+      setIsSigningOut(true);
+      await requestSignOut();
+      window.location.href = "/login";
+    } catch (error) {
+      console.error("Failed to sign out", error);
+      setIsSigningOut(false);
+    }
+  };
 
   return (
     <div className="hidden md:flex md:w-64 md:flex-col">
@@ -81,7 +97,7 @@ export default function Sidebar() {
         </nav>
 
         {/* User Menu */}
-        <div className="px-4 py-4 border-t border-border">
+        <div className="px-4 py-4 space-y-3 border-t border-border">
           <div className="flex items-center space-x-3">
             {user?.profileImageUrl ? (
               <img
@@ -112,6 +128,16 @@ export default function Sidebar() {
               <MoreHorizontal className="w-4 h-4" />
             </button>
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full justify-center"
+            onClick={handleSignOut}
+            disabled={isSigningOut}
+            data-testid="button-sign-out"
+          >
+            {isSigningOut ? "Signing out..." : "Sign out"}
+          </Button>
         </div>
       </div>
     </div>
