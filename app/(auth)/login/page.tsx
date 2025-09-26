@@ -54,18 +54,40 @@ export default function LoginPage() {
   const [magicEmail, setMagicEmail] = useState("");
   const [loginEmail, setLoginEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [status, setStatus] = useState<StatusMessage>(null);
+  const [magicStatus, setMagicStatus] = useState<StatusMessage>(null);
+  const [passwordStatus, setPasswordStatus] = useState<StatusMessage>(null);
   const [activeAction, setActiveAction] = useState<ActiveAction>(null);
   const [isPending, startTransition] = useTransition();
 
-  const setStatusMessage = (message: string, tone: StatusTone) => {
-    setStatus({ message, tone });
+  const setStatusMessage = (
+    setter: React.Dispatch<React.SetStateAction<StatusMessage>>,
+    message: string,
+    tone: StatusTone,
+  ) => {
+    setter({ message, tone });
+  };
+
+  const renderStatus = (status: StatusMessage) => {
+    if (!status) return null;
+    const variant = status.tone === "error" ? "destructive" : "default";
+    const style =
+      status.tone === "success"
+        ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-700/70 dark:bg-emerald-900/20 dark:text-emerald-200"
+        : status.tone === "error"
+          ? "border-destructive/40 bg-destructive/10 text-destructive"
+          : "border-border/60 bg-muted/60 text-muted-foreground";
+
+    return (
+      <Alert variant={variant} className={`${style} border text-sm`}>
+        <AlertDescription>{status.message}</AlertDescription>
+      </Alert>
+    );
   };
 
   const handleMagicLink = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!magicEmail) {
-      setStatusMessage("Please add the email address you use with ThriveIQ.", "error");
+      setStatusMessage(setMagicStatus, "Please add the email address you use with ThriveIQ.", "error");
       return;
     }
 
@@ -74,12 +96,13 @@ export default function LoginPage() {
 
     setActiveAction("magic");
     startTransition(async () => {
-      setStatusMessage("Sending your secure magic link...", "info");
+      setStatusMessage(setMagicStatus, "Sending your secure magic link...", "info");
+      setPasswordStatus(null);
       const res = await signInWithEmail(formData);
       if (res.ok) {
-        setStatusMessage("Check your inbox for a one-time link to sign in.", "success");
+        setStatusMessage(setMagicStatus, "Check your inbox for a one-time link to sign in.", "success");
       } else {
-        setStatusMessage(res.error || "We couldn't send that magic link.", "error");
+        setStatusMessage(setMagicStatus, res.error || "We couldn't send that magic link.", "error");
       }
     });
   };
@@ -87,7 +110,7 @@ export default function LoginPage() {
   const handleSignIn = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!loginEmail || !password) {
-      setStatusMessage("Email and password are both required to sign in.", "error");
+      setStatusMessage(setPasswordStatus, "Email and password are both required to sign in.", "error");
       return;
     }
 
@@ -97,20 +120,29 @@ export default function LoginPage() {
 
     setActiveAction("signin");
     startTransition(async () => {
-      setStatusMessage("Signing you in...", "info");
+      setStatusMessage(setPasswordStatus, "Signing you in...", "info");
+      setMagicStatus(null);
       const res = await signInWithPassword(formData);
       if (res.ok) {
-        setStatusMessage("Welcome back! Redirecting you to ThriveIQ...", "success");
+        setStatusMessage(setPasswordStatus, "Welcome back! Redirecting you to ThriveIQ...", "success");
         window.location.assign(res.redirectTo || "/");
       } else {
-        setStatusMessage(res.error || "Unable to sign in with those credentials.", "error");
+        setStatusMessage(
+          setPasswordStatus,
+          res.error || "Unable to sign in with those credentials.",
+          "error",
+        );
       }
     });
   };
 
   const handleSignUp = () => {
     if (!loginEmail || !password) {
-      setStatusMessage("Use the email and password fields above before creating an account.", "error");
+      setStatusMessage(
+        setPasswordStatus,
+        "Use the email and password fields above before creating an account.",
+        "error",
+      );
       return;
     }
 
@@ -120,26 +152,24 @@ export default function LoginPage() {
 
     setActiveAction("signup");
     startTransition(async () => {
-      setStatusMessage("Creating your ThriveIQ account...", "info");
+      setStatusMessage(setPasswordStatus, "Creating your ThriveIQ account...", "info");
+      setMagicStatus(null);
       const res = await signUpWithPassword(formData);
       if (res.ok) {
         setStatusMessage(
+          setPasswordStatus,
           "Account created! Check your inbox to confirm email, then sign in.",
           "success",
         );
       } else {
-        setStatusMessage(res.error || "Sign up didn't complete. Please try again.", "error");
+        setStatusMessage(
+          setPasswordStatus,
+          res.error || "Sign up didn't complete. Please try again.",
+          "error",
+        );
       }
     });
   };
-
-  const statusVariant = status?.tone === "error" ? "destructive" : "default";
-  const statusStyles =
-    status?.tone === "success"
-      ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-700/70 dark:bg-emerald-900/20 dark:text-emerald-200"
-      : status?.tone === "error"
-        ? "border-destructive/40 bg-destructive/10 text-destructive"
-        : "border-border/60 bg-muted/60 text-muted-foreground";
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-background">
@@ -239,6 +269,9 @@ export default function LoginPage() {
                       : "Email me a magic link"}
                   </Button>
                 </form>
+                <div className="mt-4 space-y-3">
+                  {renderStatus(magicStatus)}
+                </div>
               </section>
 
               <div className="relative flex items-center justify-center text-sm text-muted-foreground">
@@ -304,16 +337,10 @@ export default function LoginPage() {
                     </Button>
                   </div>
                 </form>
+                <div className="mt-4 space-y-3">
+                  {renderStatus(passwordStatus)}
+                </div>
               </section>
-
-              {status && (
-                <Alert
-                  variant={statusVariant}
-                  className={`${statusStyles} border text-sm`}
-                >
-                  <AlertDescription>{status.message}</AlertDescription>
-                </Alert>
-              )}
             </CardContent>
           </Card>
         </div>

@@ -16,6 +16,7 @@ import {
   History,
   Zap,
   MoreHorizontal,
+  Users,
 } from "lucide-react";
 
 type AuthUser = {
@@ -27,6 +28,7 @@ type AuthUser = {
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
+  { name: "Workspaces", href: "/workspaces", icon: Users },
   { name: "Projects", href: "/projects", icon: Kanban },
   { name: "Work Items", href: "/work-items", icon: ClipboardList },
   { name: "Templates", href: "/templates", icon: FileText },

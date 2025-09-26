@@ -8,11 +8,15 @@ export async function GET() {
   if (!userId) return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
   const { data, error } = await supabase
     .from('workspace_members')
-    .select('workspaces(*)')
-    .eq('user_id', userId);
+    .select('role, workspaces(*)')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: true });
 
   if (error) return NextResponse.json({ message: error.message }, { status: 500 });
-  const workspaces = (data ?? []).map((r: any) => r.workspaces);
+  const workspaces = (data ?? []).map((r: any) => ({
+    ...(r.workspaces ?? {}),
+    role: r.role,
+  }));
   return NextResponse.json(workspaces);
 }
 

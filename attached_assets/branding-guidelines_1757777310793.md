@@ -1,6 +1,6 @@
-# BacklogGenXpert — Design Language & UI Guidelines
+# ThriveIQ — Design Language & UI Guidelines
 
-BacklogGenXpert must feel modern, intuitive, and aligned with Thrivara’s consulting brand. The UI should evoke trust, expertise, and clarity while supporting fast interactions for technical and business users.
+ThriveIQ must feel modern, intuitive, and aligned with Thrivara’s consulting brand. The UI should evoke trust, expertise, and clarity while supporting fast interactions for technical and business users.
 
 ## Core Principles
 - **Clarity over clutter**: clean layouts, clear hierarchy, no unnecessary ornamentation.

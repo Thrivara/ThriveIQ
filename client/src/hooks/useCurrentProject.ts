@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useWorkspaceContext } from '@/context/workspace-context';
 
-type Workspace = { id: string; name: string };
 type Project = { id: string; name: string; workspaceId?: string; workspace_id?: string };
 
 interface ProjectsResponse {
@@ -10,17 +10,19 @@ interface ProjectsResponse {
 
 const STORAGE_KEY = 'thrivemq.currentProjectId';
 
-export function useCurrentProject() {
-  const workspacesQ = useQuery<Workspace[]>({ queryKey: ['/api/workspaces'], retry: false });
+function getStorageKeyForWorkspace(workspaceId: string) {
+  return `${STORAGE_KEY}:${workspaceId}`;
+}
 
-  const firstWsId = workspacesQ.data?.[0]?.id;
+export function useCurrentProject() {
+  const { workspaces, activeWorkspaceId, activeWorkspace, isLoading: workspaceLoading } = useWorkspaceContext();
 
   const projectsQ = useQuery<ProjectsResponse>({
-    queryKey: firstWsId ? ['/api/workspaces', firstWsId, 'projects', 'summary'] : ['disabled'],
-    enabled: !!firstWsId,
+    queryKey: activeWorkspaceId ? ['/api/workspaces', activeWorkspaceId, 'projects', 'summary'] : ['disabled'],
+    enabled: !!activeWorkspaceId,
     retry: false,
     queryFn: async () => {
-      const res = await fetch(`/api/workspaces/${firstWsId}/projects?limit=50`, {
+      const res = await fetch(`/api/workspaces/${activeWorkspaceId}/projects?limit=50`, {
         credentials: 'include',
       });
       if (!res.ok) throw new Error(await res.text());
@@ -28,17 +30,22 @@ export function useCurrentProject() {
     },
   });
 
-  // Selected project state sourced from localStorage, with sensible defaults
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // Initialize from storage when mounted
   useEffect(() => {
+    if (!activeWorkspaceId) {
+      setSelectedId(null);
+      return;
+    }
     if (typeof window === 'undefined') return;
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (stored) setSelectedId(stored);
-  }, []);
+    const stored = window.localStorage.getItem(getStorageKeyForWorkspace(activeWorkspaceId));
+    if (stored) {
+      setSelectedId(stored);
+    } else {
+      setSelectedId(null);
+    }
+  }, [activeWorkspaceId]);
 
-  // Resolve actual current project from projects list + stored/defaults
   const project = useMemo(() => {
     const list = projectsQ.data?.items ?? [];
     if (!list.length) return undefined;
@@ -61,18 +68,28 @@ export function useCurrentProject() {
 
   const selectProject = (id: string) => {
     setSelectedId(id);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(STORAGE_KEY, id);
+    if (typeof window !== 'undefined' && activeWorkspaceId) {
+      window.localStorage.setItem(getStorageKeyForWorkspace(activeWorkspaceId), id);
     }
   };
 
+  useEffect(() => {
+    if (!project || !activeWorkspaceId) return;
+    if (project.id === selectedId) return;
+    setSelectedId(project.id);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(getStorageKeyForWorkspace(activeWorkspaceId), project.id);
+    }
+  }, [project, activeWorkspaceId, selectedId]);
+
   return {
-    isLoading: workspacesQ.isLoading || projectsQ.isLoading,
-    workspaces: workspacesQ.data ?? [],
+    isLoading: workspaceLoading || projectsQ.isLoading,
+    workspaces,
     projects: projectsQ.data?.items ?? [],
     projectId,
     project,
-    workspaceId: firstWsId ?? null,
+    workspaceId: activeWorkspaceId ?? null,
+    workspace: activeWorkspace ?? null,
     selectProject,
   };
 }

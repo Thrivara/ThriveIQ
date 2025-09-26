@@ -42,6 +42,7 @@ export const workspaces = pgTable("workspaces", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   name: varchar("name", { length: 255 }).notNull(),
   ownerId: uuid("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  description: text("description"),
   billingInfo: jsonb("billing_info"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

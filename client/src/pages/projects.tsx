@@ -12,11 +12,7 @@ import { ProjectsFiltersDialog } from "@/components/projects/projects-filters-di
 import { ProjectDetailsDialog } from "@/components/projects/project-details-dialog";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { Card, CardContent } from "@/components/ui/card";
-
-interface Workspace {
-  id: string;
-  name: string;
-}
+import { useWorkspaceContext } from "@/context/workspace-context";
 
 interface WorkspaceMemberResponse {
   members: Array<{
@@ -80,9 +76,8 @@ export default function Projects() {
     }
   }, [authLoading, isAuthenticated, toast]);
 
-  const workspacesQuery = useQuery<Workspace[]>({ queryKey: ["/api/workspaces"] });
-  const workspaceId = workspacesQuery.data?.[0]?.id ?? null;
-  const workspaceName = workspacesQuery.data?.[0]?.name ?? "";
+  const { activeWorkspaceId: workspaceId, activeWorkspace } = useWorkspaceContext();
+  const workspaceName = activeWorkspace?.name ?? "";
 
   const membersQuery = useQuery<WorkspaceMemberResponse>({
     queryKey: workspaceId ? ["/api/workspaces", workspaceId, "members"] : ["disabled", "members"],
