@@ -30,8 +30,11 @@ export async function PATCH(req: Request, { params }: { params: { projectId: str
     .eq('id', params.integrationId)
     .eq('project_id', params.projectId)
     .select()
-    .single();
+    .maybeSingle();
   if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+  if (!data) {
+    return NextResponse.json({ message: 'Integration update failed' }, { status: 404 });
+  }
   return NextResponse.json(mapIntegration(data));
 }
 

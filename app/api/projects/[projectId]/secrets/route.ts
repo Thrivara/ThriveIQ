@@ -40,16 +40,22 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
       .update({ encrypted_value: toStore })
       .eq('id', existing.id)
       .select()
-      .single();
+      .maybeSingle();
     if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+    if (!data) {
+      return NextResponse.json({ message: 'Secret update failed' }, { status: 500 });
+    }
     return NextResponse.json({ id: data.id, projectId: data.project_id, provider: data.provider });
   } else {
     const { data, error } = await supabase
       .from('secrets')
       .insert({ project_id: params.projectId, provider, encrypted_value: toStore })
       .select()
-      .single();
+      .maybeSingle();
     if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+    if (!data) {
+      return NextResponse.json({ message: 'Secret insert failed' }, { status: 500 });
+    }
     return NextResponse.json({ id: data.id, projectId: data.project_id, provider: data.provider });
   }
 }

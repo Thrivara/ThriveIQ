@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useState, useMemo, useEffect, type ReactNode } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
@@ -14,7 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { useMutation } from "@tanstack/react-query";
 import { ClipboardList, ExternalLink, Sparkles, Loader2 } from "lucide-react";
-import { useState, useMemo } from "react";
+import { Checkbox } from "@/components/ui/checkbox";
 
 interface ApplyOptions {
   selectedFields: string[];
@@ -45,12 +45,45 @@ interface RunItem {
   [key: string]: unknown;
 }
 
+interface WorkItemSummary {
+  id: number;
+  title?: string;
+  state?: string;
+  type?: string;
+  assignedTo?: string | null;
+  changedDate?: string | null;
+  iterationPath?: string | null;
+  areaPath?: string | null;
+  tags?: string[];
+  descriptionPreview?: string;
+  source: string;
+  links: { html: string };
+}
+
+interface WorkItemFilters {
+  types: string[];
+  states: string[];
+  assignedTo: string[];
+  iterations: string[];
+  areas: string[];
+  tags: string[];
+}
+
+interface WorkItemsResponse {
+  items: WorkItemSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+  filters?: WorkItemFilters;
+}
+
 export default function WorkItems() {
   const { toast } = useToast();
   const { isAuthenticated, isLoading } = useAuth();
   const { projectId, isLoading: loadingProject } = useCurrentProject();
 
   // Always call hooks in the same order; use `enabled` to guard queries
+  const [searchInput, setSearchInput] = useState("");
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -58,14 +91,79 @@ export default function WorkItems() {
   const [sortDir, setSortDir] = useState<'ASC'|'DESC'>("DESC");
   const [selected, setSelected] = useState<Record<number, boolean>>({});
   const [detailId, setDetailId] = useState<number|null>(null);
-  const [showCols, setShowCols] = useState({ id: true, title: true, type: true, state: true, assigned: true, sprint: true, changed: false, link: true });
+  const [showCols, setShowCols] = useState({ id: true, title: true, type: true, state: true, assigned: true, sprint: true, area: false, tags: false, changed: false, link: true });
   const [filterTypes, setFilterTypes] = useState<string[]>([]);
   const [filterStates, setFilterStates] = useState<string[]>([]);
   const [filterAssigned, setFilterAssigned] = useState<string[]>([]);
   const [filterIterations, setFilterIterations] = useState<string[]>([]);
+  const [filterAreas, setFilterAreas] = useState<string[]>([]);
+  const [filterTags, setFilterTags] = useState<string[]>([]);
 
-  const queryKey = useMemo(()=> projectId ? ["/api/projects", projectId, "work-items", { q, page, pageSize, sortBy, sortDir, filterTypes, filterStates, filterAssigned, filterIterations }] : ["disabled"], [projectId,q,page,pageSize,sortBy,sortDir,filterTypes,filterStates,filterAssigned,filterIterations]);
-  const { data, isLoading: itemsLoading, error, refetch } = useQuery<{ items: any[], total: number, page: number, pageSize: number }>({
+  const toggleFilterValue = (
+    value: string,
+    setter: React.Dispatch<React.SetStateAction<string[]>>,
+  ) => {
+    setPage(1);
+    setter((prev) =>
+      prev.includes(value)
+        ? prev.filter((item) => item !== value)
+        : [...prev, value],
+    );
+  };
+
+  const clearFilterValues = (setter: React.Dispatch<React.SetStateAction<string[]>>) => {
+    setPage(1);
+    setter([]);
+  };
+
+  const clearAllFilters = () => {
+    setPage(1);
+    setFilterTypes([]);
+    setFilterStates([]);
+    setFilterAssigned([]);
+    setFilterIterations([]);
+    setFilterAreas([]);
+    setFilterTags([]);
+  };
+
+  const queryKey = useMemo(
+    () =>
+      projectId
+        ? [
+            "/api/projects",
+            projectId,
+            "work-items",
+            {
+              q,
+              page,
+              pageSize,
+              sortBy,
+              sortDir,
+              filterTypes,
+              filterStates,
+              filterAssigned,
+              filterIterations,
+              filterAreas,
+              filterTags,
+            },
+          ]
+        : ["disabled"],
+    [
+      projectId,
+      q,
+      page,
+      pageSize,
+      sortBy,
+      sortDir,
+      filterTypes,
+      filterStates,
+      filterAssigned,
+      filterIterations,
+      filterAreas,
+      filterTags,
+    ],
+  );
+  const { data, isLoading: itemsLoading, error, refetch } = useQuery<WorkItemsResponse>({
     queryKey,
     enabled: !!projectId && isAuthenticated && !isLoading && !loadingProject,
     queryFn: async () => {
@@ -75,11 +173,63 @@ export default function WorkItems() {
       filterStates.forEach(s=> params.append('state', s));
       filterAssigned.forEach(a=> params.append('assignedTo', a));
       filterIterations.forEach(i=> params.append('iteration', i));
+      filterAreas.forEach(ap=> params.append('area', ap));
+      filterTags.forEach(t=> params.append('tag', t));
       const res = await fetch(`/api/projects/${projectId}/work-items?`+params.toString());
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     }
   });
+
+  const currentItems: WorkItemSummary[] = data?.items ?? [];
+
+  const fallbackFilters = useMemo<WorkItemFilters>(() => {
+    const types = uniqueSorted(currentItems.map((item) => item.type ?? null));
+    const states = uniqueSorted(currentItems.map((item) => item.state ?? null));
+    const assigned = uniqueSorted(currentItems.map((item) => item.assignedTo ?? 'Unassigned'));
+    if (!assigned.includes('Unassigned')) {
+      assigned.push('Unassigned');
+      assigned.sort((a, b) => a.localeCompare(b));
+    }
+    const iterations = uniqueSorted(currentItems.map((item) => item.iterationPath ?? null));
+    const areas = uniqueSorted(currentItems.map((item) => item.areaPath ?? null));
+    const tagSet = new Set<string>();
+    currentItems.forEach((item) => {
+      (item.tags ?? []).forEach((tag) => {
+        if (tag) tagSet.add(tag);
+      });
+    });
+    const tags = Array.from(tagSet).sort((a, b) => a.localeCompare(b));
+
+    return { types, states, assignedTo: assigned, iterations, areas, tags };
+  }, [currentItems]);
+
+  const baseFilters = data?.filters;
+
+  const typeOptions = useMemo(
+    () => buildFilterOptions(baseFilters?.types, filterTypes, fallbackFilters.types),
+    [baseFilters?.types, filterTypes, fallbackFilters.types],
+  );
+  const stateOptions = useMemo(
+    () => buildFilterOptions(baseFilters?.states, filterStates, fallbackFilters.states),
+    [baseFilters?.states, filterStates, fallbackFilters.states],
+  );
+  const assignedOptions = useMemo(
+    () => buildFilterOptions(baseFilters?.assignedTo, filterAssigned, fallbackFilters.assignedTo, true),
+    [baseFilters?.assignedTo, filterAssigned, fallbackFilters.assignedTo],
+  );
+  const iterationOptions = useMemo(
+    () => buildFilterOptions(baseFilters?.iterations, filterIterations, fallbackFilters.iterations),
+    [baseFilters?.iterations, filterIterations, fallbackFilters.iterations],
+  );
+  const areaOptions = useMemo(
+    () => buildFilterOptions(baseFilters?.areas, filterAreas, fallbackFilters.areas),
+    [baseFilters?.areas, filterAreas, fallbackFilters.areas],
+  );
+  const tagOptions = useMemo(
+    () => buildFilterOptions(baseFilters?.tags, filterTags, fallbackFilters.tags),
+    [baseFilters?.tags, filterTags, fallbackFilters.tags],
+  );
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -114,54 +264,29 @@ export default function WorkItems() {
           <p className="text-muted-foreground">Browse and manage work items from your connected integrations</p>
         </div>
 
-        <div className="mb-4 flex items-center gap-2">
-          <Input placeholder="Filter by keyword" value={q} onChange={(e)=> setQ(e.target.value)} className="max-w-sm" />
-          <Button onClick={()=>{ setPage(1); refetch(); }}>Search</Button>
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="secondary" className="bg-purple-600 text-white hover:bg-purple-700">Filters</Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-80">
-              <div className="space-y-3">
-                <div>
-                  <div className="text-sm font-medium mb-1">Types</div>
-                  <div className="flex flex-wrap gap-2">
-                    {Array.from(new Set((data?.items||[]).map(i=> i.type).filter(Boolean))).map((t)=> (
-                      <Badge key={t} variant={filterTypes.includes(t) ? 'default':'secondary'} className={`cursor-pointer ${typeBadgeClass(t)}`} onClick={()=> setFilterTypes((prev)=> prev.includes(t) ? prev.filter(x=>x!==t) : [...prev, t])}>{t}</Badge>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium mb-1">States</div>
-                  <div className="flex flex-wrap gap-2">
-                    {Array.from(new Set((data?.items||[]).map(i=> i.state).filter(Boolean))).map((s)=> (
-                      <Badge key={s} variant={filterStates.includes(s) ? 'default':'secondary'} className="cursor-pointer" onClick={()=> setFilterStates((prev)=> prev.includes(s) ? prev.filter(x=>x!==s) : [...prev, s])}>{s}</Badge>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium mb-1">Assigned</div>
-                  <div className="flex flex-wrap gap-2 max-h-28 overflow-auto">
-                    {Array.from(new Set((data?.items||[]).map(i=> i.assignedTo || 'Unassigned'))).map((a)=> (
-                      <Badge key={a} variant={filterAssigned.includes(a) ? 'default':'secondary'} className="cursor-pointer" onClick={()=> setFilterAssigned((prev)=> prev.includes(a) ? prev.filter(x=>x!==a) : [...prev, a])}>{a}</Badge>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium mb-1">Sprint</div>
-                  <div className="flex flex-wrap gap-2 max-h-28 overflow-auto">
-                    {Array.from(new Set((data?.items||[]).map(i=> i.iterationPath).filter(Boolean))).map((it)=> (
-                      <Badge key={it} variant={filterIterations.includes(it as string) ? 'default':'secondary'} className="cursor-pointer" onClick={()=> setFilterIterations((prev)=> prev.includes(it as string) ? prev.filter(x=>x!==(it as string)) : [...prev, it as string])}>{it as string}</Badge>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex justify-between">
-                  <Button variant="outline" onClick={()=> { setFilterTypes([]); setFilterStates([]); setFilterAssigned([]); }}>Clear</Button>
-                  <Button onClick={()=> { setPage(1); refetch(); }}>Apply</Button>
-                </div>
-              </div>
-            </PopoverContent>
-          </Popover>
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <Input
+            placeholder="Filter by keyword"
+            value={searchInput}
+            onChange={(e)=> setSearchInput(e.target.value)}
+            onKeyDown={(e)=> {
+              if (e.key === 'Enter') {
+                setQ(searchInput.trim());
+                setPage(1);
+                refetch();
+              }
+            }}
+            className="max-w-sm"
+          />
+          <Button
+            onClick={()=>{
+              setQ(searchInput.trim());
+              setPage(1);
+              refetch();
+            }}
+          >
+            Search
+          </Button>
           <div className="ml-auto flex items-center gap-2 text-sm">
             <span>Sort</span>
             <select value={sortBy} onChange={(e)=> setSortBy(e.target.value as any)} className="border rounded px-2 py-1">
@@ -186,6 +311,8 @@ export default function WorkItems() {
                   { key: 'state', label: 'State' },
                   { key: 'assigned', label: 'Assigned' },
                   { key: 'sprint', label: 'Sprint' },
+                  { key: 'area', label: 'Area Path' },
+                  { key: 'tags', label: 'Tags' },
                   { key: 'changed', label: 'Changed' },
                   { key: 'link', label: 'Link' },
                 ].map(({ key, label })=> (
@@ -198,6 +325,83 @@ export default function WorkItems() {
             </Popover>
           </div>
         </div>
+
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <FilterMultiSelect
+            label="Types"
+            options={typeOptions}
+            selected={filterTypes}
+            onToggle={(value) => toggleFilterValue(value, setFilterTypes)}
+            onClear={() => clearFilterValues(setFilterTypes)}
+            renderOption={(option, _checked) => (
+              <Badge variant="secondary" className={`text-xs ${typeBadgeClass(option)}`}>
+                {option}
+              </Badge>
+            )}
+          />
+          <FilterMultiSelect
+            label="States"
+            options={stateOptions}
+            selected={filterStates}
+            onToggle={(value) => toggleFilterValue(value, setFilterStates)}
+            onClear={() => clearFilterValues(setFilterStates)}
+            renderOption={(option, _checked) => (
+              <Badge variant="secondary" className="text-xs">
+                {option}
+              </Badge>
+            )}
+          />
+          <FilterMultiSelect
+            label="Assigned"
+            options={assignedOptions}
+            selected={filterAssigned}
+            onToggle={(value) => toggleFilterValue(value, setFilterAssigned)}
+            onClear={() => clearFilterValues(setFilterAssigned)}
+            renderOption={(option, _checked) => (
+              <Badge variant="secondary" className="text-xs">
+                {option}
+              </Badge>
+            )}
+          />
+          <FilterMultiSelect
+            label="Sprint"
+            options={iterationOptions}
+            selected={filterIterations}
+            onToggle={(value) => toggleFilterValue(value, setFilterIterations)}
+            onClear={() => clearFilterValues(setFilterIterations)}
+            renderOption={(option, _checked) => (
+              <Badge variant="secondary" className="text-xs">
+                {option}
+              </Badge>
+            )}
+          />
+          <FilterMultiSelect
+            label="Area"
+            options={areaOptions}
+            selected={filterAreas}
+            onToggle={(value) => toggleFilterValue(value, setFilterAreas)}
+            onClear={() => clearFilterValues(setFilterAreas)}
+            renderOption={(option, _checked) => (
+              <span className="text-xs font-medium truncate max-w-[200px]">{option}</span>
+            )}
+          />
+          <FilterMultiSelect
+            label="Tags"
+            options={tagOptions}
+            selected={filterTags}
+            onToggle={(value) => toggleFilterValue(value, setFilterTags)}
+            onClear={() => clearFilterValues(setFilterTags)}
+            renderOption={(option, _checked) => (
+              <Badge variant="outline" className="text-xs">
+                {option}
+              </Badge>
+            )}
+          />
+          <Button variant="ghost" onClick={clearAllFilters}>
+            Clear Filters
+          </Button>
+        </div>
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center space-x-2">
@@ -236,6 +440,8 @@ export default function WorkItems() {
                       {showCols.state && <th className="py-2 px-2">State</th>}
                       {showCols.assigned && <th className="py-2 px-2">Assigned</th>}
                       {showCols.sprint && <th className="py-2 px-2">Sprint</th>}
+                      {showCols.area && <th className="py-2 px-2">Area Path</th>}
+                      {showCols.tags && <th className="py-2 px-2">Tags</th>}
                       {showCols.changed && <th className="py-2 px-2">Changed</th>}
                       {showCols.link && <th className="py-2 px-2">Link</th>}
                     </tr>
@@ -259,6 +465,18 @@ export default function WorkItems() {
                         </td>}
                         {showCols.assigned && <td className="py-2 px-2">{w.assignedTo ?? 'Unassigned'}</td>}
                         {showCols.sprint && <td className="py-2 px-2">{w.iterationPath ?? ''}</td>}
+                        {showCols.area && <td className="py-2 px-2">{w.areaPath ?? ''}</td>}
+                        {showCols.tags && (
+                          <td className="py-2 px-2">
+                            <div className="flex flex-wrap gap-1">
+                              {(w.tags || []).map((tag: string) => (
+                                <Badge key={tag} variant="outline" className="text-xs">
+                                  {tag}
+                                </Badge>
+                              ))}
+                            </div>
+                          </td>
+                        )}
                         {showCols.changed && <td className="py-2 px-2">{w.changedDate ? new Date(w.changedDate).toLocaleString() : ''}</td>}
                         {showCols.link && <td className="py-2 px-2" onClick={(e)=> e.stopPropagation()}>
                           <a href={w.links?.html} target="_blank" rel="noreferrer" className="text-primary inline-flex items-center gap-1"><ExternalLink className="w-4 h-4" />Open</a>
@@ -661,6 +879,126 @@ function FieldList({ title, beforeItems, afterItems }: { title: string; beforeIt
       </div>
     </div>
   );
+}
+
+interface FilterMultiSelectProps {
+  label: string;
+  options: string[];
+  selected: string[];
+  onToggle: (value: string) => void;
+  onClear: () => void;
+  renderOption?: (option: string, checked: boolean) => ReactNode;
+}
+
+function FilterMultiSelect({
+  label,
+  options,
+  selected,
+  onToggle,
+  onClear,
+  renderOption,
+}: FilterMultiSelectProps) {
+  const hasSelection = selected.length > 0;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          variant={hasSelection ? "secondary" : "outline"}
+          className="flex items-center gap-2"
+        >
+          <span>{label}</span>
+          {hasSelection ? (
+            <span className="flex h-5 min-w-[1.5rem] items-center justify-center rounded-full bg-primary/10 px-2 text-xs font-medium text-primary">
+              {selected.length}
+            </span>
+          ) : (
+            <span className="text-xs text-muted-foreground">All</span>
+          )}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-0">
+        <div className="flex items-center justify-between border-b px-3 py-2 text-sm font-medium">
+          <span>{label}</span>
+          {hasSelection && (
+            <button
+              type="button"
+              className="text-xs text-primary hover:underline"
+              onClick={onClear}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        <div className="max-h-64 overflow-y-auto">
+          <div className="flex flex-col gap-1 p-2">
+            {options.length === 0 ? (
+              <p className="py-6 text-center text-xs text-muted-foreground">No options</p>
+            ) : (
+              options.map((option) => {
+                const checked = selected.includes(option);
+                return (
+                  <label
+                    key={option}
+                    className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm hover:bg-muted"
+                  >
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={() => onToggle(option)}
+                    />
+                    <div className="flex-1 min-w-0">
+                      {renderOption ? renderOption(option, checked) : (
+                        <span className="truncate">{option}</span>
+                      )}
+                    </div>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function uniqueSorted(values: (string | null | undefined)[]): string[] {
+  const set = new Set<string>();
+  values.forEach((value) => {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (trimmed) {
+      set.add(trimmed);
+    }
+  });
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
+}
+
+function buildFilterOptions(
+  base: string[] | undefined,
+  selected: string[] | undefined,
+  fallback: string[],
+  ensureUnassigned = false,
+): string[] {
+  const set = new Set<string>();
+  const addValues = (values?: string[]) => {
+    if (!values) return;
+    values.forEach((value) => {
+      if (!value) return;
+      const trimmed = value.trim();
+      if (trimmed) {
+        set.add(trimmed);
+      }
+    });
+  };
+
+  const baseSource = base && base.length ? base : fallback;
+  addValues(baseSource);
+  addValues(selected);
+
+  if (ensureUnassigned) {
+    set.add('Unassigned');
+  }
+
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
 }
 
 function typeBadgeClass(type?: string) {

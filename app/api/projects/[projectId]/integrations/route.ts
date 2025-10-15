@@ -42,7 +42,10 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
     .from('integrations')
     .insert({ project_id: params.projectId, type, credentials_ref: credentialsRef ?? null, metadata: metadata ?? null, is_active: true })
     .select()
-    .single();
+    .maybeSingle();
   if (error) return NextResponse.json({ message: error.message }, { status: 500 });
+  if (!data) {
+    return NextResponse.json({ message: 'Failed to create integration' }, { status: 500 });
+  }
   return NextResponse.json(mapIntegration(data));
 }

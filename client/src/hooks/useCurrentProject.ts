@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useWorkspaceContext } from '@/context/workspace-context';
 
@@ -8,14 +8,17 @@ interface ProjectsResponse {
   items: Project[];
 }
 
-const STORAGE_KEY = 'thrivemq.currentProjectId';
-
-function getStorageKeyForWorkspace(workspaceId: string) {
-  return `${STORAGE_KEY}:${workspaceId}`;
-}
-
 export function useCurrentProject() {
-  const { workspaces, activeWorkspaceId, activeWorkspace, isLoading: workspaceLoading } = useWorkspaceContext();
+  const {
+    workspaces,
+    activeWorkspaceId,
+    activeWorkspace,
+    projectSelections,
+    isLoading: workspaceLoading,
+    setActiveProject,
+  } = useWorkspaceContext();
+
+  const selectionState = activeWorkspaceId ? projectSelections[activeWorkspaceId] : undefined;
 
   const projectsQ = useQuery<ProjectsResponse>({
     queryKey: activeWorkspaceId ? ['/api/workspaces', activeWorkspaceId, 'projects', 'summary'] : ['disabled'],
@@ -30,62 +33,57 @@ export function useCurrentProject() {
     },
   });
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const projects = projectsQ.data?.items ?? [];
 
-  useEffect(() => {
-    if (!activeWorkspaceId) {
-      setSelectedId(null);
-      return;
-    }
-    if (typeof window === 'undefined') return;
-    const stored = window.localStorage.getItem(getStorageKeyForWorkspace(activeWorkspaceId));
-    if (stored) {
-      setSelectedId(stored);
-    } else {
-      setSelectedId(null);
-    }
-  }, [activeWorkspaceId]);
+  const selectedProjectId = useMemo(() => {
+    if (selectionState === undefined) return undefined;
+    if (selectionState) return selectionState;
+    return projects[0]?.id ?? null;
+  }, [selectionState, projects]);
 
   const project = useMemo(() => {
-    const list = projectsQ.data?.items ?? [];
-    if (!list.length) return undefined;
-
-    // 1) Stored selection
-    if (selectedId) {
-      const match = list.find((p) => p.id === selectedId);
-      if (match) return match;
-    }
-
-    // 2) Prefer seeded MHEG if present
-    const mheg = list.find((p) => (p.name || '').toLowerCase() === 'mheg');
-    if (mheg) return mheg;
-
-    // 3) Fallback to first project
-    return list[0];
-  }, [projectsQ.data?.items, selectedId]);
-
-  const projectId = project?.id;
-
-  const selectProject = (id: string) => {
-    setSelectedId(id);
-    if (typeof window !== 'undefined' && activeWorkspaceId) {
-      window.localStorage.setItem(getStorageKeyForWorkspace(activeWorkspaceId), id);
-    }
-  };
+    if (!selectedProjectId) return undefined;
+    return projects.find((p) => p.id === selectedProjectId);
+  }, [projects, selectedProjectId]);
 
   useEffect(() => {
-    if (!project || !activeWorkspaceId) return;
-    if (project.id === selectedId) return;
-    setSelectedId(project.id);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(getStorageKeyForWorkspace(activeWorkspaceId), project.id);
+    if (!activeWorkspaceId) return;
+    const list = projects;
+    if (selectionState === undefined) return;
+    if (!list.length) return;
+
+    if (selectionState === null) {
+      const fallback = list[0]?.id ?? null;
+      if (fallback) {
+        setActiveProject(activeWorkspaceId, fallback);
+      }
+      return;
     }
-  }, [project, activeWorkspaceId, selectedId]);
+
+    if (list.some((p) => p.id === selectionState)) {
+      return;
+    }
+
+    const fallback = list[0]?.id ?? null;
+    setActiveProject(activeWorkspaceId, fallback);
+  }, [
+    projects,
+    activeWorkspaceId,
+    selectionState,
+    setActiveProject,
+  ]);
+
+  const projectId = selectedProjectId ?? undefined;
+
+  const selectProject = (id: string) => {
+    if (!activeWorkspaceId) return;
+    setActiveProject(activeWorkspaceId, id);
+  };
 
   return {
     isLoading: workspaceLoading || projectsQ.isLoading,
     workspaces,
-    projects: projectsQ.data?.items ?? [],
+    projects,
     projectId,
     project,
     workspaceId: activeWorkspaceId ?? null,
