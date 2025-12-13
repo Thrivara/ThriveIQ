@@ -2,7 +2,13 @@ import { useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useWorkspaceContext } from '@/context/workspace-context';
 
-type Project = { id: string; name: string; workspaceId?: string; workspace_id?: string };
+type Project = { 
+  id: string; 
+  name: string; 
+  workspaceId?: string; 
+  workspace_id?: string;
+  tracker?: { type: 'jira' | 'azure_devops' | 'none'; label: string };
+};
 
 interface ProjectsResponse {
   items: Project[];

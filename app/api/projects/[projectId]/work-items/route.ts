@@ -61,7 +61,7 @@ export async function GET(req: Request, { params }: { params: { projectId: strin
   const pageSize = Math.min(100, Math.max(1, parseInt(urlObj.searchParams.get('pageSize') || '25', 10)));
   const q = (urlObj.searchParams.get('q') || '').trim();
   const sortBy = (urlObj.searchParams.get('sortBy') || 'ChangedDate');
-  const sortDir = (urlObj.searchParams.get('sortDir') || 'DESC').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+  const sortDir: 'ASC' | 'DESC' = (urlObj.searchParams.get('sortDir') || 'DESC').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
   const types = urlObj.searchParams.getAll('type');
   const states = urlObj.searchParams.getAll('state');
   const assigned = urlObj.searchParams.getAll('assignedTo');

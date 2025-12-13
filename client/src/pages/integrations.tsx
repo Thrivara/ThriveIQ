@@ -453,52 +453,101 @@ export default function Integrations() {
               <DialogHeader>
                 <DialogTitle>{editIntegration ? `Configure ${getTrackerLabel(formType)}` : "Add Tracker Integration"}</DialogTitle>
               </DialogHeader>
-              <Form {...activeForm}>
-                <form onSubmit={activeForm.handleSubmit(handleSubmit)} className="space-y-4">
-                  {!editIntegration && (
-                    <div>
-                      <Label>Integration Type</Label>
-                      <Select
-                        value={formType}
-                        onValueChange={(value) => {
-                          setFormType(value as Integration["type"]);
-                          azureForm.reset();
-                          jiraForm.reset();
-                        }}
+              {formType === "azure_devops" ? (
+                <Form {...azureForm}>
+                  <form onSubmit={azureForm.handleSubmit(handleSubmit)} className="space-y-4">
+                    {!editIntegration && (
+                      <div>
+                        <Label>Integration Type</Label>
+                        <Select
+                          value={formType}
+                          onValueChange={(value) => {
+                            setFormType(value as Integration["type"]);
+                            azureForm.reset();
+                            jiraForm.reset();
+                          }}
+                        >
+                          <SelectTrigger className="mt-1">
+                            <SelectValue placeholder="Select tracker" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="azure_devops">Azure DevOps</SelectItem>
+                            <SelectItem value="jira">Jira Cloud</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    {renderAzureFields()}
+                    <div className="flex justify-end space-x-2 pt-4">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setDialogOpen(false)}
+                        data-testid="button-cancel"
                       >
-                        <SelectTrigger className="mt-1">
-                          <SelectValue placeholder="Select tracker" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="azure_devops">Azure DevOps</SelectItem>
-                          <SelectItem value="jira">Jira Cloud</SelectItem>
-                        </SelectContent>
-                      </Select>
+                        Cancel
+                      </Button>
+                      <Button
+                        type="submit"
+                        disabled={createIntegrationMutation.isPending || updateIntegrationMutation.isPending}
+                        data-testid="button-create-integration"
+                      >
+                        {(createIntegrationMutation.isPending || updateIntegrationMutation.isPending) && (
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        )}
+                        {editIntegration ? 'Save Changes' : 'Create Integration'}
+                      </Button>
                     </div>
-                  )}
-                  {formType === "azure_devops" ? renderAzureFields() : renderJiraFields()}
-                  <div className="flex justify-end space-x-2 pt-4">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => setDialogOpen(false)}
-                      data-testid="button-cancel"
-                    >
-                      Cancel
-                    </Button>
-                    <Button
-                      type="submit"
-                      disabled={createIntegrationMutation.isPending || updateIntegrationMutation.isPending}
-                      data-testid="button-create-integration"
-                    >
-                      {(createIntegrationMutation.isPending || updateIntegrationMutation.isPending) && (
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      )}
-                      {editIntegration ? 'Save Changes' : 'Create Integration'}
-                    </Button>
-                  </div>
-                </form>
-              </Form>
+                  </form>
+                </Form>
+              ) : (
+                <Form {...jiraForm}>
+                  <form onSubmit={jiraForm.handleSubmit(handleSubmit)} className="space-y-4">
+                    {!editIntegration && (
+                      <div>
+                        <Label>Integration Type</Label>
+                        <Select
+                          value={formType}
+                          onValueChange={(value) => {
+                            setFormType(value as Integration["type"]);
+                            azureForm.reset();
+                            jiraForm.reset();
+                          }}
+                        >
+                          <SelectTrigger className="mt-1">
+                            <SelectValue placeholder="Select tracker" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="azure_devops">Azure DevOps</SelectItem>
+                            <SelectItem value="jira">Jira Cloud</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                    {renderJiraFields()}
+                    <div className="flex justify-end space-x-2 pt-4">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setDialogOpen(false)}
+                        data-testid="button-cancel"
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        type="submit"
+                        disabled={createIntegrationMutation.isPending || updateIntegrationMutation.isPending}
+                        data-testid="button-create-integration"
+                      >
+                        {(createIntegrationMutation.isPending || updateIntegrationMutation.isPending) && (
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        )}
+                        {editIntegration ? 'Save Changes' : 'Create Integration'}
+                      </Button>
+                    </div>
+                  </form>
+                </Form>
+              )}
             </DialogContent>
           </Dialog>
         </div>
