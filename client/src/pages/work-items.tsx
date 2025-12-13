@@ -22,8 +22,8 @@ interface ApplyOverrides {
     descriptionHtml?: string;
     storyPoints?: number | null;
     tasks?: string[];
-    acceptanceList?: string[];
-    testCaseList?: string[];
+    acceptanceCriteria?: string[];
+    testCases?: Array<{ given: string; when: string; then: string }>;
   };
 }
 
@@ -96,6 +96,8 @@ type EditableRunItemFields = {
   acceptanceCriteriaHtml: string;
   storyPoints: number | null;
   tasks: string[];
+  acceptanceCriteria: string[];
+  testCases: Array<{ given: string; when: string; then: string }>;
 };
 
 export default function WorkItems() {
@@ -664,13 +666,16 @@ function WorkItemDetails({ projectId, target }: { projectId: string; target: { i
       const next = { ...prev };
       runItemsQ.data.forEach((runItem) => {
         if (!next[runItem.id]) {
-          const after = runItem.after_json || {};
+          const after = (runItem.after_json as any) || {};
+          const enhanced = (after.enhanced as any) || {};
           next[runItem.id] = {
             title: after.title ?? '',
             descriptionHtml: after.descriptionHtml ?? '',
             acceptanceCriteriaHtml: after.acceptanceCriteriaHtml ?? '',
-            storyPoints: after.enhanced?.storyPoints ?? null,
-            tasks: Array.isArray(after.enhanced?.tasks) ? [...after.enhanced.tasks] : [],
+            storyPoints: enhanced.storyPoints ?? null,
+            tasks: Array.isArray(enhanced.tasks) ? [...enhanced.tasks] : [],
+            acceptanceCriteria: Array.isArray(enhanced.acceptanceCriteria) ? [...enhanced.acceptanceCriteria] : [],
+            testCases: Array.isArray(enhanced.testCases) ? [...enhanced.testCases] : [],
           };
         }
       });
@@ -841,6 +846,8 @@ function WorkItemDetails({ projectId, target }: { projectId: string; target: { i
                     acceptanceCriteriaHtml: '',
                     storyPoints: null,
                     tasks: [],
+                    acceptanceCriteria: [],
+                    testCases: [],
                   };
                 return (
                   <div key={ri.id} className="space-y-4 rounded-lg border border-border/70 bg-background/50 p-4">
@@ -851,14 +858,17 @@ function WorkItemDetails({ projectId, target }: { projectId: string; target: { i
                         size="sm"
                       onClick={() => {
                         const after = ri.after_json || {};
+                        const enhanced = after.enhanced || {};
                         setEditableOverrides((prev) => ({
                           ...prev,
                           [ri.id]: {
                             title: after.title ?? '',
                             descriptionHtml: after.descriptionHtml ?? '',
                             acceptanceCriteriaHtml: after.acceptanceCriteriaHtml ?? '',
-                            storyPoints: after.enhanced?.storyPoints ?? null,
-                            tasks: Array.isArray(after.enhanced?.tasks) ? [...after.enhanced.tasks] : [],
+                            storyPoints: enhanced.storyPoints ?? null,
+                            tasks: Array.isArray(enhanced.tasks) ? [...enhanced.tasks] : [],
+                            acceptanceCriteria: Array.isArray(enhanced.acceptanceCriteria) ? [...enhanced.acceptanceCriteria] : [],
+                            testCases: Array.isArray(enhanced.testCases) ? [...enhanced.testCases] : [],
                           },
                         }));
                       }}
@@ -912,16 +922,146 @@ function WorkItemDetails({ projectId, target }: { projectId: string; target: { i
                       }
                     />
 
-                    <EditableHtmlSection
-                      label="Acceptance Criteria"
-                      value={editable.acceptanceCriteriaHtml}
-                      onChange={(value) =>
-                        setEditableOverrides((prev) => ({
-                          ...prev,
-                          [ri.id]: { ...editable, acceptanceCriteriaHtml: value },
-                        }))
-                      }
-                    />
+                    <div className="space-y-2">
+                      <Label>Acceptance Criteria</Label>
+                      <div className="space-y-2">
+                        {(editable.acceptanceCriteria || []).map((ac, idx) => (
+                          <div key={idx} className="flex items-center gap-2">
+                            <Input
+                              value={ac}
+                              onChange={(event) => {
+                                const nextAc = [...(editable.acceptanceCriteria || [])];
+                                nextAc[idx] = event.target.value;
+                                setEditableOverrides((prev) => ({
+                                  ...prev,
+                                  [ri.id]: { ...editable, acceptanceCriteria: nextAc },
+                                }));
+                              }}
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => {
+                                const nextAc = (editable.acceptanceCriteria || []).filter((_, i) => i !== idx);
+                                setEditableOverrides((prev) => ({
+                                  ...prev,
+                                  [ri.id]: { ...editable, acceptanceCriteria: nextAc },
+                                }));
+                              }}
+                            >
+                              ×
+                            </Button>
+                          </div>
+                        ))}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            setEditableOverrides((prev) => ({
+                              ...prev,
+                              [ri.id]: { ...editable, acceptanceCriteria: [...(editable.acceptanceCriteria || []), ''] },
+                            }))
+                          }
+                        >
+                          Add Acceptance Criterion
+                        </Button>
+                      </div>
+                      {(!editable.acceptanceCriteria || editable.acceptanceCriteria.length === 0) && (
+                        <p className="text-xs text-muted-foreground">No acceptance criteria captured; add one above.</p>
+                      )}
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label>Test Cases</Label>
+                      <div className="space-y-2">
+                        {(editable.testCases || []).map((tc, idx) => (
+                          <div key={idx} className="space-y-2 p-3 border rounded-md">
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-xs font-medium text-muted-foreground">Test Case {idx + 1}</span>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => {
+                                  const nextTcs = (editable.testCases || []).filter((_, i) => i !== idx);
+                                  setEditableOverrides((prev) => ({
+                                    ...prev,
+                                    [ri.id]: { ...editable, testCases: nextTcs },
+                                  }));
+                                }}
+                              >
+                                ×
+                              </Button>
+                            </div>
+                            <div className="space-y-2">
+                              <div>
+                                <Label className="text-xs">Given</Label>
+                                <Input
+                                  value={tc.given || ''}
+                                  onChange={(event) => {
+                                    const nextTcs = [...(editable.testCases || [])];
+                                    nextTcs[idx] = { ...tc, given: event.target.value };
+                                    setEditableOverrides((prev) => ({
+                                      ...prev,
+                                      [ri.id]: { ...editable, testCases: nextTcs },
+                                    }));
+                                  }}
+                                  placeholder="Given condition"
+                                />
+                              </div>
+                              <div>
+                                <Label className="text-xs">When</Label>
+                                <Input
+                                  value={tc.when || ''}
+                                  onChange={(event) => {
+                                    const nextTcs = [...(editable.testCases || [])];
+                                    nextTcs[idx] = { ...tc, when: event.target.value };
+                                    setEditableOverrides((prev) => ({
+                                      ...prev,
+                                      [ri.id]: { ...editable, testCases: nextTcs },
+                                    }));
+                                  }}
+                                  placeholder="When action"
+                                />
+                              </div>
+                              <div>
+                                <Label className="text-xs">Then</Label>
+                                <Input
+                                  value={tc.then || ''}
+                                  onChange={(event) => {
+                                    const nextTcs = [...(editable.testCases || [])];
+                                    nextTcs[idx] = { ...tc, then: event.target.value };
+                                    setEditableOverrides((prev) => ({
+                                      ...prev,
+                                      [ri.id]: { ...editable, testCases: nextTcs },
+                                    }));
+                                  }}
+                                  placeholder="Then expected result"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            setEditableOverrides((prev) => ({
+                              ...prev,
+                              [ri.id]: { ...editable, testCases: [...(editable.testCases || []), { given: '', when: '', then: '' }] },
+                            }))
+                          }
+                        >
+                          Add Test Case
+                        </Button>
+                      </div>
+                      {(!editable.testCases || editable.testCases.length === 0) && (
+                        <p className="text-xs text-muted-foreground">No test cases captured; add one above.</p>
+                      )}
+                    </div>
 
                     <div className="space-y-2">
                       <Label>Implementation Tasks</Label>

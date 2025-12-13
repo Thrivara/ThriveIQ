@@ -72,6 +72,30 @@ export async function POST(req: Request, { params }: { params: { runId: string }
             .map((t: any) => (typeof t === 'string' ? t.trim() : ''))
             .filter((t: string) => t.length > 0);
         }
+        if (Array.isArray(override.acceptanceCriteria)) {
+          after.enhanced = after.enhanced || {};
+          after.enhanced.acceptanceCriteria = override.acceptanceCriteria
+            .map((ac: any) => (typeof ac === 'string' ? ac.trim() : ''))
+            .filter((ac: string) => ac.length > 0);
+        }
+        if (Array.isArray(override.testCases)) {
+          after.enhanced = after.enhanced || {};
+          after.enhanced.testCases = override.testCases
+            .map((tc: any) => {
+              if (!tc || typeof tc !== 'object') return null;
+              // Strip "Given", "When", "Then" prefixes to avoid duplication
+              let given = typeof tc.given === 'string' ? tc.given.trim() : '';
+              let when = typeof tc.when === 'string' ? tc.when.trim() : '';
+              let then = typeof tc.then === 'string' ? tc.then.trim() : '';
+              // Remove prefixes if present
+              given = given.replace(/^Given\s+/i, '').trim();
+              when = when.replace(/^When\s+/i, '').trim();
+              then = then.replace(/^Then\s+/i, '').trim();
+              if (!given && !when && !then) return null;
+              return { given, when, then };
+            })
+            .filter((tc: any): tc is { given: string; when: string; then: string } => tc !== null);
+        }
       }
       let trackerResult;
       if (integration.type === 'jira') {
@@ -493,9 +517,9 @@ function buildJiraDescriptionDoc(enhanced: any, after: any) {
   if (descriptionText) {
     descriptionText
       .split(/\n+/)
-      .map((line) => line.trim())
+      .map((line: string) => line.trim())
       .filter(Boolean)
-      .forEach((line) => pushParagraph(line));
+      .forEach((line: string) => pushParagraph(line));
   }
   if (Array.isArray(enhanced.implementationNotes) && enhanced.implementationNotes.length) {
     pushHeading('Implementation Notes');
@@ -556,23 +580,35 @@ function extractListFromHtml(html?: string): string[] {
 }
 
 function collectAcceptanceItems(enhanced: any, after: any): string[] {
+  // Prioritize array from enhanced data (which may include overrides)
+  if (Array.isArray(enhanced?.acceptanceCriteria) && enhanced.acceptanceCriteria.length > 0) {
+    return enhanced.acceptanceCriteria.filter((ac: any) => typeof ac === 'string' && ac.trim().length > 0);
+  }
+  // Fall back to parsing HTML override if no array
   if (after?._overrideAcceptance) {
     const overrides = extractListFromHtml(after._overrideAcceptance);
     if (overrides.length) return overrides;
   }
-  return Array.isArray(enhanced?.acceptanceCriteria) ? enhanced.acceptanceCriteria : [];
+  return [];
 }
 
 function collectTestCaseItems(enhanced: any): string[] {
-  if (!Array.isArray(enhanced?.testCases)) return [];
+  if (!Array.isArray(enhanced?.testCases) || enhanced.testCases.length === 0) return [];
   return enhanced.testCases
     .map((tc: any) => {
-      if (!tc || (!tc.given && !tc.when && !tc.then)) return null;
-      return [tc.given, tc.when, tc.then].some((part) => typeof part === 'string' && part.trim().length)
-        ? `Given ${tc.given || ''}, When ${tc.when || ''}, Then ${tc.then || ''}`.replace(/\s+,/g, ',').trim()
-        : null;
+      if (!tc || typeof tc !== 'object') return null;
+      // Strip "Given", "When", "Then" prefixes to avoid duplication when formatting
+      let given = typeof tc.given === 'string' ? tc.given.trim() : '';
+      let when = typeof tc.when === 'string' ? tc.when.trim() : '';
+      let then = typeof tc.then === 'string' ? tc.then.trim() : '';
+      // Remove prefixes if present
+      given = given.replace(/^Given\s+/i, '').trim();
+      when = when.replace(/^When\s+/i, '').trim();
+      then = then.replace(/^Then\s+/i, '').trim();
+      if (!given && !when && !then) return null;
+      return `Given ${given}, When ${when}, Then ${then}`.replace(/\s+,/g, ',').trim();
     })
-    .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+    .filter((entry: string | null): entry is string => typeof entry === 'string' && entry.length > 0);
 }
 
 function renderAcceptanceHtml(items: string[]): string {
@@ -719,7 +755,7 @@ function buildInlineNodes(text: string): any[] {
     if (italicStart !== -1) {
       const italicEnd = remaining.indexOf('_', italicStart + 1);
       if (italicEnd !== -1) {
-        const italicMarker = { start: italicStart, end: italicEnd, type: 'italic', length: 1 };
+        const italicMarker: { start: number; end: number; type: 'bold' | 'italic'; length: number } = { start: italicStart, end: italicEnd, type: 'italic', length: 1 };
         if (!marker || italicMarker.start < marker.start) {
           marker = italicMarker;
         }

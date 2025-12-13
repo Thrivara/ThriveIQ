@@ -256,8 +256,15 @@ Rules
 - Story-point estimates follow Fibonacci (1,2,3,5,8,13) with rationale. SPIKEs are timeboxed.
 - Tasks must be outcome-based and ready to become Jira Sub-tasks.
 - Test Cases must use the Given/When/Then structure so they can become Zephyr Test issues.
-- Replace every '<List here>' placeholder with concrete details derived from the work item, templates, and context.`,
-      userIntro: `You are enhancing a Jira Cloud work item into a complete, Jira-ready user story. Ensure the Description begins with the Role-Goal-Reason sentence immediately followed by the Acceptance Criteria list, and keep formatting compatible with Atlassian's renderer.`,
+- Replace every '<List here>' placeholder with concrete details derived from the work item, templates, and context.
+
+Brevity Rules
+- Be extremely concise. Each acceptance criterion should be 1 sentence max.
+- Test cases should be brief - keep Given/When/Then to essential information only.
+- Implementation notes should list only essential tech stack items (3-5 max per category).
+- Keep all sections brief, scannable, and actionable. Avoid verbose explanations.
+- Focus on essential information only - developers need quick, clear guidance.`,
+      userIntro: `You are enhancing a Jira Cloud work item into a complete, Jira-ready user story. Ensure the Description begins with the Role-Goal-Reason sentence immediately followed by the Acceptance Criteria list, and keep formatting compatible with Atlassian's renderer. Keep all content brief and scannable.`,
     };
   }
 
@@ -297,8 +304,15 @@ Rules
 - Story-point estimates follow Fibonacci (1,2,3,5,8,13) with rationale. SPIKEs are timeboxed.
 - Keep explanations precise, concise, and professional.
 - Always include the Role-Goal-Reason as the first line of the description.
-- Replace every '<List here>' placeholder with concrete details derived from the work item, templates, and context.`,
-    userIntro: `You are enhancing an Azure DevOps work item into a complete, ADO-ready user story.`,
+- Replace every '<List here>' placeholder with concrete details derived from the work item, templates, and context.
+
+Brevity Rules
+- Be extremely concise. Each acceptance criterion should be 1 sentence max.
+- Test cases should be brief - keep Given/When/Then to essential information only.
+- Implementation notes should list only essential tech stack items (3-5 max per category).
+- Keep all text brief and scannable. Avoid verbose explanations. Focus on essential information only.
+- Developers need quick, clear guidance - prioritize brevity over completeness.`,
+    userIntro: `You are enhancing an Azure DevOps work item into a complete, ADO-ready user story. Keep all content brief and scannable.`,
   };
 }
 
@@ -542,7 +556,7 @@ ${projectGuardrails}
             try {
               const retrieval: any = await callWithRetry<any>(
                 () => (openai.responses.create as any)({
-                  model: 'gpt-5-mini',
+                  model: 'gpt-5.2',
                   input: [
                     {
                       role: 'system',
@@ -583,7 +597,6 @@ ${projectGuardrails}
                   max_tool_calls: 1,
                   include: ['file_search_call.results'],
                   max_output_tokens: 1200,
-                  temperature: 0.0,
                 }),
                 'retrieval',
                 1
@@ -626,7 +639,7 @@ ${projectGuardrails}
           // ---------- Phase 2: Generation-only (no tools) ----------
           const response: any = await callWithRetry<any>(
             () => (openai.responses.create as any)({
-              model: 'gpt-5-mini',
+              model: 'gpt-5.2',
               input: [
                 {
                   role: 'system',
@@ -656,8 +669,7 @@ ${projectGuardrails}
               ],
               text: { format: TEXT_FORMAT },
               tool_choice: 'none',
-              max_output_tokens: 1200,
-              temperature: 0.3,
+              max_output_tokens: 1500,
             }),
             'generation',
             3
@@ -667,6 +679,10 @@ ${projectGuardrails}
           // Prefer structured outputs (.parsed) from the Phase 2 response
           const extractParsed = (r: any): any | null => {
             try {
+              // Try direct parsed property first
+              if (r?.parsed && typeof r.parsed === 'object') return r.parsed;
+              
+              // Try output array with parsed content
               const outputs = r?.output || [];
               for (const node of outputs) {
                 if (node?.type === 'message') {
@@ -675,8 +691,15 @@ ${projectGuardrails}
                     if (p?.parsed) return p.parsed;
                   }
                 }
+                // Also check if node itself has parsed
+                if (node?.parsed) return node.parsed;
               }
-            } catch {}
+              
+              // Try output_text with parsed
+              if (r?.output_text?.parsed) return r.output_text.parsed;
+            } catch (err: any) {
+              console.warn('[Generation] Error in extractParsed:', err?.message);
+            }
             return null;
           }
           let parsed = extractParsed(response) || null;
@@ -684,11 +707,102 @@ ${projectGuardrails}
           // Also try output_text as a final fallback
           if (!parsed) {
             const txt = ((response as any)?.output_text || extractText(response) || '').toString();
-            try { parsed = JSON.parse(txt); } catch { parsed = null; }
+            if (txt) {
+              // Try to extract JSON from text if it's wrapped
+              let jsonStr = txt.trim();
+              // Remove markdown code blocks if present
+              if (jsonStr.startsWith('```json')) {
+                jsonStr = jsonStr.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+              } else if (jsonStr.startsWith('```')) {
+                jsonStr = jsonStr.replace(/^```\s*/, '').replace(/\s*```$/, '');
+              }
+              
+              // Check if response was incomplete due to token limit
+              const isIncomplete = response?.status === 'incomplete' && 
+                                   response?.incomplete_details?.reason === 'max_output_tokens';
+              
+              if (isIncomplete) {
+                // Try to repair truncated JSON by closing open strings/objects/arrays
+                try {
+                  // Attempt to fix common truncation issues
+                  let repaired = jsonStr;
+                  // Count unclosed braces/brackets
+                  const openBraces = (repaired.match(/\{/g) || []).length - (repaired.match(/\}/g) || []).length;
+                  const openBrackets = (repaired.match(/\[/g) || []).length - (repaired.match(/\]/g) || []).length;
+                  
+                  // If we're in the middle of a string, try to close it
+                  if (repaired.match(/[^\\]"[^"]*$/)) {
+                    // String appears to be open, try to close it
+                    repaired = repaired.replace(/([^\\])"[^"]*$/, '$1"');
+                  }
+                  
+                  // Close any open arrays
+                  for (let i = 0; i < openBrackets; i++) {
+                    repaired += ']';
+                  }
+                  
+                  // Close any open objects
+                  for (let i = 0; i < openBraces; i++) {
+                    repaired += '}';
+                  }
+                  
+                  parsed = JSON.parse(repaired);
+                  console.warn('[Generation] Repaired incomplete JSON response due to token limit');
+                } catch (repairErr: any) {
+                  // If repair failed, try to parse what we have with defaults
+                  console.warn('[Generation] Could not repair incomplete JSON, attempting partial parse');
+                  try {
+                    // Try to extract what we can from the partial JSON
+                    const partialMatch = jsonStr.match(/^\s*\{/);
+                    if (partialMatch) {
+                      // At least we have a starting brace, try to extract known fields
+                      const titleMatch = jsonStr.match(/"title"\s*:\s*"([^"]*)"/);
+                      const typeMatch = jsonStr.match(/"type"\s*:\s*"([^"]*)"/);
+                      parsed = {
+                        title: titleMatch ? titleMatch[1] : '',
+                        type: typeMatch ? typeMatch[1] : 'User Story',
+                        roleGoalReason: null,
+                        descriptionText: '',
+                        acceptanceCriteria: [],
+                        testCases: [],
+                        implementationNotes: [],
+                        tasks: [],
+                        gaps: [],
+                        dependencies: [],
+                        storyPoints: null,
+                        estimateRationale: null,
+                        tags: [],
+                      };
+                      console.warn('[Generation] Using partial data from incomplete response');
+                    }
+                  } catch {}
+                }
+              } else {
+                // Not incomplete, try normal parse
+                try { 
+                  parsed = JSON.parse(jsonStr); 
+                } catch (parseErr: any) {
+                  console.error('[Generation] Failed to parse output_text as JSON:', {
+                    error: parseErr?.message,
+                    textPreview: jsonStr.slice(0, 500),
+                    responseKeys: Object.keys(response || {}),
+                  });
+                  parsed = null;
+                }
+              }
+            }
           }
 
           if (!parsed || typeof parsed !== 'object') {
-            throw new Error('Model returned no structured output.');
+            const responsePreview = JSON.stringify(response, null, 2).slice(0, 1000);
+            console.error('[Generation] No structured output found:', {
+              hasParsed: !!parsed,
+              hasOutputText: !!(response as any)?.output_text,
+              extractedText: extractText(response).slice(0, 200),
+              responsePreview,
+              isIncomplete: response?.status === 'incomplete',
+            });
+            throw new Error(`Model returned no structured output. Response status: ${response?.status || 'unknown'}. Response keys: ${Object.keys(response || {}).join(', ')}`);
           }
 
           let json: any = parsed;
@@ -749,6 +863,36 @@ ${projectGuardrails}
               descriptionText = lines.join('\n').trim();
             }
           }
+          // Remove acceptance criteria from descriptionText to avoid duplication
+          // Acceptance criteria are handled separately in acceptanceCriteriaHtml
+          if (descriptionText) {
+            // Remove "Acceptance Criteria:" section and everything after it
+            const acMatch = descriptionText.match(/(?:\n|^)\s*(?:Acceptance\s+Criteria|Acceptance Criteria):/i);
+            if (acMatch) {
+              descriptionText = descriptionText.substring(0, acMatch.index).trim();
+            }
+            // Also remove any bullet points that look like acceptance criteria
+            // (lines starting with bullet points after role-goal-reason)
+            const lines = descriptionText.split(/\n+/);
+            const filteredLines: string[] = [];
+            let foundAcSection = false;
+            for (const line of lines) {
+              const trimmed = line.trim();
+              // Stop if we hit a section header that suggests AC or test cases
+              if (/^(?:Test\s+Cases?|Implementation\s+Notes?|Tasks?|Gaps?|Dependencies?|Story\s+Points?|Estimate)/i.test(trimmed)) {
+                foundAcSection = true;
+              }
+              // Skip bullet points that might be AC (but keep other content)
+              if (!foundAcSection || !/^[-•*]\s+/.test(trimmed)) {
+                if (!foundAcSection) {
+                  filteredLines.push(line);
+                }
+              } else {
+                foundAcSection = true;
+              }
+            }
+            descriptionText = filteredLines.join('\n').trim();
+          }
           const mainDesc = descriptionText ? `<p>${descriptionText.replace(/\n+/g, '</p><p>')}</p>` : '';
           const impl = json.implementationNotes && json.implementationNotes.length
             ? `<h3>Implementation Notes</h3>${bulletsToHtml(json.implementationNotes)}`
@@ -784,7 +928,14 @@ ${projectGuardrails}
               roleGoalReason: roleGoalReason || null,
               descriptionText: json.descriptionText || null,
               acceptanceCriteria: json.acceptanceCriteria || [],
-              testCases: json.testCases || [],
+              testCases: Array.isArray(json.testCases) ? json.testCases.map((tc: any) => {
+                // Strip "Given", "When", "Then" prefixes from test cases to avoid duplication
+                if (!tc || typeof tc !== 'object') return tc;
+                const given = typeof tc.given === 'string' ? tc.given.replace(/^Given\s+/i, '').trim() : '';
+                const when = typeof tc.when === 'string' ? tc.when.replace(/^When\s+/i, '').trim() : '';
+                const then = typeof tc.then === 'string' ? tc.then.replace(/^Then\s+/i, '').trim() : '';
+                return { given, when, then };
+              }) : [],
               tasks: mergedTasks,
               implementationNotes: json.implementationNotes || [],
               gaps: json.gaps || [],
