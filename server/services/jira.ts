@@ -24,18 +24,18 @@ export class JiraService {
       }
       jql += ' ORDER BY created DESC';
 
-      // Make API request to Jira
-      const response = await fetch(`${baseUrl}/rest/api/3/search`, {
-        method: 'POST',
+      const searchUrl = new URL(`${baseUrl}/rest/api/3/search/jql`);
+      searchUrl.searchParams.set('jql', jql);
+      searchUrl.searchParams.set('maxResults', '50');
+      ['summary', 'description', 'issuetype', 'status', 'priority', 'assignee', 'updated', 'parent'].forEach((field) =>
+        searchUrl.searchParams.append('fields', field),
+      );
+
+      const response = await fetch(searchUrl.toString(), {
         headers: {
           'Authorization': `Basic ${Buffer.from(`${email}:${apiToken}`).toString('base64')}`,
-          'Content-Type': 'application/json',
+          'Accept': 'application/json',
         },
-        body: JSON.stringify({
-          jql,
-          maxResults: 50,
-          fields: ['summary', 'description', 'issuetype', 'status', 'priority', 'assignee', 'updated', 'parent'],
-        }),
       });
 
       if (!response.ok) {

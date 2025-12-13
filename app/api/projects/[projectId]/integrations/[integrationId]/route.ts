@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from 'lib/supabase/server';
+import { enforceSingleActiveTracker, isTrackerIntegration } from 'lib/integrations';
 
 function mapIntegration(row: any) {
   return {
@@ -34,6 +35,9 @@ export async function PATCH(req: Request, { params }: { params: { projectId: str
   if (error) return NextResponse.json({ message: error.message }, { status: 500 });
   if (!data) {
     return NextResponse.json({ message: 'Integration update failed' }, { status: 404 });
+  }
+  if (data.is_active && isTrackerIntegration(data.type)) {
+    await enforceSingleActiveTracker(supabase, params.projectId, data.id);
   }
   return NextResponse.json(mapIntegration(data));
 }

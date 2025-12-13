@@ -14,6 +14,7 @@ import {
 const updateSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   description: z.string().max(2000).optional().nullable(),
+  guardrails: z.string().max(8000).optional().nullable(),
   status: z.enum(['active', 'planning', 'review', 'archived']).optional(),
   teamUserIds: z.array(z.string().uuid()).optional(),
 });
@@ -65,7 +66,13 @@ export async function PUT(
     const payload = await request.json().catch(() => ({}));
     const body = updateSchema.parse(payload);
 
-    if (!body.name && !body.description && !body.status && !body.teamUserIds) {
+    const hasUpdates =
+      body.name !== undefined ||
+      body.description !== undefined ||
+      body.status !== undefined ||
+      body.guardrails !== undefined ||
+      body.teamUserIds !== undefined;
+    if (!hasUpdates) {
       return NextResponse.json({ message: 'No updates provided' }, { status: 400 });
     }
 
@@ -74,6 +81,7 @@ export async function PUT(
     }
 
     const updates: Record<string, unknown> = { last_updated: new Date().toISOString() };
+    let nextGuardrails: string | null | undefined;
 
     if (body.name) {
       const trimmed = body.name.trim();
@@ -104,6 +112,15 @@ export async function PUT(
 
     if (body.description !== undefined) {
       updates.description = body.description ?? null;
+    }
+
+    if (body.guardrails !== undefined) {
+      const normalizedGuardrails =
+        typeof body.guardrails === 'string' && body.guardrails.trim().length
+          ? body.guardrails.trim()
+          : null;
+      updates.guardrails = normalizedGuardrails;
+      nextGuardrails = normalizedGuardrails;
     }
 
     if (body.status) {
@@ -180,6 +197,9 @@ export async function PUT(
       changed.description = body.description ?? null;
     }
     if (body.status && body.status !== current.status) changed.status = body.status;
+    if (body.guardrails !== undefined && nextGuardrails !== current.guardrails) {
+      changed.guardrails = nextGuardrails ?? null;
+    }
     if (Array.isArray(body.teamUserIds)) changed.team = body.teamUserIds.length;
 
     await recordProjectAudit(supabase, {
