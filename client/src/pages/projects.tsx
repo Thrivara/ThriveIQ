@@ -210,11 +210,18 @@ export default function Projects() {
   });
 
   const handleSubmit = async (values: ProjectFormValues & { teamUserIds?: string[] }) => {
+    const normalizedGuardrails =
+      typeof values.guardrails === "string"
+        ? values.guardrails.trim().length
+          ? values.guardrails
+          : null
+        : values.guardrails ?? null;
+    const payload = { ...values, guardrails: normalizedGuardrails };
     try {
       if (editingProject) {
-        await updateProject.mutateAsync({ ...values, id: editingProject.id });
+        await updateProject.mutateAsync({ ...payload, id: editingProject.id });
       } else {
-        await createProject.mutateAsync(values);
+        await createProject.mutateAsync(payload);
       }
     } catch {
       // handled via mutation onError

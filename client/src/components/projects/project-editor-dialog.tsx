@@ -25,6 +25,12 @@ const projectSchema = z.object({
     .optional()
     .or(z.literal(""))
     .nullable(),
+  guardrails: z
+    .string()
+    .max(8000, "Guardrails must be under 8000 characters")
+    .optional()
+    .or(z.literal(""))
+    .nullable(),
   status: z.enum(["active", "planning", "review", "archived"]),
 });
 
@@ -39,6 +45,7 @@ interface ProjectEditorDialogProps {
     name: string;
     description: string | null;
     status: ProjectStatusFilter;
+    guardrails?: string | null;
   } | null;
   members?: Array<{
     userId: string;
@@ -62,6 +69,7 @@ export function ProjectEditorDialog({
     defaultValues: {
       name: "",
       description: "",
+      guardrails: "",
       status: "active",
     },
   });
@@ -71,6 +79,7 @@ export function ProjectEditorDialog({
       form.reset({
         name: project?.name ?? "",
         description: project?.description ?? "",
+        guardrails: project?.guardrails ?? "",
         status: (project?.status ?? "active") as ProjectFormValues["status"],
       });
     }
@@ -133,6 +142,26 @@ export function ProjectEditorDialog({
                     <Textarea
                       placeholder="Add a short summary"
                       className="min-h-[100px]"
+                      value={field.value ?? ""}
+                      onChange={(event) => field.onChange(event.target.value)}
+                      disabled={isSubmitting}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="guardrails"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Guardrails</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      placeholder="List the allowed platforms, technologies, and constraints for this project"
+                      className="min-h-[140px]"
                       value={field.value ?? ""}
                       onChange={(event) => field.onChange(event.target.value)}
                       disabled={isSubmitting}

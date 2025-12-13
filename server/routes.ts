@@ -469,7 +469,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Insufficient permissions" });
       }
 
-      const { templateId, workItemIds, contextIds, provider = 'openai', model = 'gpt-5' } = req.body;
+      const { templateId, workItemIds, contextIds, provider = 'openai', model = 'gpt-5.2' } = req.body;
       
       // Create run record
       const run = await storage.createRun({

@@ -23,6 +23,7 @@ export interface ProjectListItem {
   id: string;
   name: string;
   description: string | null;
+  guardrails: string | null;
   status: "active" | "planning" | "review" | "archived";
   itemCount: number;
   memberCount: number;

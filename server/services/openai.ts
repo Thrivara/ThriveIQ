@@ -121,7 +121,7 @@ Please enhance this work item according to the template provided. Return your re
 }`;
 
       const response = await openai.chat.completions.create({
-        model: "gpt-5", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
+        model: "gpt-5.2", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: prompt }
@@ -150,7 +150,7 @@ Please enhance this work item according to the template provided. Return your re
   async generateSummary(text: string): Promise<string> {
     try {
       const response = await openai.chat.completions.create({
-        model: "gpt-5", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
+        model: "gpt-5.2", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
         messages: [
           {
             role: "user",
@@ -170,7 +170,7 @@ Please enhance this work item according to the template provided. Return your re
   async analyzeSentiment(text: string): Promise<{ rating: number; confidence: number }> {
     try {
       const response = await openai.chat.completions.create({
-        model: "gpt-5", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
+        model: "gpt-5.2", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
         messages: [
           {
             role: "system",

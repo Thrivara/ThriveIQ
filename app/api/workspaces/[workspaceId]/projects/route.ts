@@ -24,6 +24,7 @@ const querySchema = z.object({
 const createProjectSchema = z.object({
   name: z.string().min(1).max(255),
   description: z.string().max(2000).optional().nullable(),
+  guardrails: z.string().max(8000).optional().nullable(),
   status: z.enum(['active', 'planning', 'review', 'archived']).optional(),
   teamUserIds: z.array(z.string().uuid()).optional(),
 });
@@ -119,6 +120,11 @@ export async function POST(request: Request, { params }: { params: { workspaceId
       );
     }
 
+    const normalizedGuardrails =
+      typeof body.guardrails === 'string' && body.guardrails.trim().length
+        ? body.guardrails.trim()
+        : null;
+
     const insertResult = await supabase
       .from('projects')
       .insert({
@@ -126,6 +132,7 @@ export async function POST(request: Request, { params }: { params: { workspaceId
         name,
         description: body.description ?? null,
         status: normalizedStatus,
+        guardrails: normalizedGuardrails,
         owner_user_id: userId,
         last_updated: new Date().toISOString(),
       })

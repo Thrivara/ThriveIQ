@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createSupabaseServerClient } from 'lib/supabase/server';
 import OpenAI from 'openai';
 import { strict } from 'assert';
+import { isTrackerIntegration } from 'lib/integrations';
 
 
 const STANDARD_ENGINEERING_TASKS = ['PR Review', 'Dev Testing', 'QA Handoff'];
@@ -150,36 +151,30 @@ function buildForbiddenRegexFromGuardrails(txt: string): RegExp | null {
 }
 // --- End guardrails parsing helpers ---
 
-async function fetchAdoItemDetail(projectId: string, itemId: string, supabase: any) {
-  const { data: integration } = await supabase
-    .from('integrations')
-    .select('*')
-    .eq('project_id', projectId)
-    .eq('type', 'azure_devops')
-    .eq('is_active', true)
-    .maybeSingle();
-  const { data: secret } = await supabase
-    .from('secrets')
-    .select('*')
-    .eq('project_id', projectId)
-    .eq('provider', 'azure_devops')
-    .maybeSingle();
-  if (!integration || !secret) throw new Error('ADO integration/secret missing');
-
-  let patRaw: string = secret.encrypted_value;
-  if (process.env.APP_ENCRYPTION_KEY) {
-    const { decryptString } = await import('lib/crypto');
-    patRaw = decryptString(patRaw);
+async function fetchTrackerItemDetail(integration: any, creds: any, itemId: string) {
+  if (integration.type === 'jira') {
+    return fetchJiraItemDetail(integration, creds, itemId);
   }
-  const creds = typeof patRaw === 'string' ? JSON.parse(patRaw) : patRaw;
+  return fetchAzureItemDetail(integration, creds, itemId);
+}
+
+async function fetchAzureItemDetail(integration: any, creds: any, itemId: string) {
   const organization = (integration.metadata as any)?.organization || creds.organization;
   const project = (integration.metadata as any)?.project || creds.project;
   const pat = creds.personalAccessToken;
+  if (!organization || !project || !pat) throw new Error('Incomplete Azure DevOps credentials');
   const authHeader = 'Basic ' + Buffer.from(':' + pat).toString('base64');
   const url = `https://dev.azure.com/${encodeURIComponent(organization)}/_apis/wit/workitems/${encodeURIComponent(itemId)}?api-version=7.1`;
-  const resp = await fetch(url, { headers: { Authorization: authHeader, Accept: 'application/json', 'X-TFS-FedAuthRedirect': 'Suppress', 'User-Agent': 'ThriveIQ/1.0' } });
+  const resp = await fetch(url, {
+    headers: {
+      Authorization: authHeader,
+      Accept: 'application/json',
+      'X-TFS-FedAuthRedirect': 'Suppress',
+      'User-Agent': 'ThriveIQ/1.0',
+    },
+  });
   const txt = await resp.text();
-  if (!resp.ok) throw new Error(`ADO error: ${resp.status} ${txt.slice(0,200)}`);
+  if (!resp.ok) throw new Error(`ADO error: ${resp.status} ${txt.slice(0, 200)}`);
   const json: any = JSON.parse(txt);
   const f = json.fields || {};
   return {
@@ -187,6 +182,123 @@ async function fetchAdoItemDetail(projectId: string, itemId: string, supabase: a
     title: f['System.Title'] || '',
     descriptionHtml: (f['System.Description'] || '').toString(),
     acceptanceCriteriaHtml: (f['Microsoft.VSTS.Common.AcceptanceCriteria'] || '').toString(),
+  };
+}
+
+async function fetchJiraItemDetail(integration: any, creds: any, itemId: string) {
+  const baseUrl = (integration.metadata as any)?.baseUrl || creds.baseUrl;
+  const email = creds.email;
+  const apiToken = creds.apiToken;
+  if (!baseUrl || !email || !apiToken) {
+    throw new Error('Incomplete Jira credentials');
+  }
+  const authHeader = 'Basic ' + Buffer.from(`${email}:${apiToken}`).toString('base64');
+  const url = `${baseUrl}/rest/api/3/issue/${encodeURIComponent(itemId)}?expand=renderedFields`;
+  const resp = await fetch(url, {
+    headers: {
+      Authorization: authHeader,
+      Accept: 'application/json',
+    },
+  });
+  const txt = await resp.text();
+  if (!resp.ok) throw new Error(`Jira error: ${resp.status} ${txt.slice(0, 200)}`);
+  const json: any = JSON.parse(txt);
+  const fields = json.fields || {};
+  const rendered = json.renderedFields || {};
+  return {
+    id: json.id || json.key,
+    title: fields.summary || '',
+    descriptionHtml: rendered.description || '',
+    acceptanceCriteriaHtml: '',
+  };
+}
+
+function getTrackerPrompt(
+  trackerType: 'azure_devops' | 'jira',
+): { systemPrompt: string; userIntro: string } {
+  if (trackerType === 'jira') {
+    return {
+      systemPrompt: `Principal-level Agile coach and analyst who produces Jira Cloud-ready user stories with Atlassian-friendly formatting.
+User Stories (Jira Cloud Description order)
+Template:
+Title: <Story title>
+Type: User Story / SPIKE / Bug / Task / Test Case
+Role-Goal-Reason: As a <role>, I want <capability> so that <outcome>.
+Acceptance Criteria:
+- <List here>
+
+Test Cases:
+- Given <context>, When <action>, Then <result>
+
+Implementation Notes:
+- Tech stack: <List here>
+- Security Controls: <List here>
+- NFRs: <List here>
+
+Tasks (will become Jira Sub-tasks):
+- <List here>
+
+Zephyr Test Cases (Issue Type "Test"):
+- <List here>
+
+Gaps / Ambiguities:
+- <List here>
+
+Dependencies:
+- <List here>
+
+Story Point Estimate: <Fibonacci or SPIKE timebox>
+Estimate Rationale: <List here>
+
+Rules
+- Description must start with the Role-Goal-Reason sentence and immediately follow with the Acceptance Criteria bullet list.
+- Keep explanations precise, concise, and professional. No Markdown headings beyond what Atlassian automatically renders.
+- Story-point estimates follow Fibonacci (1,2,3,5,8,13) with rationale. SPIKEs are timeboxed.
+- Tasks must be outcome-based and ready to become Jira Sub-tasks.
+- Test Cases must use the Given/When/Then structure so they can become Zephyr Test issues.
+- Replace every '<List here>' placeholder with concrete details derived from the work item, templates, and context.`,
+      userIntro: `You are enhancing a Jira Cloud work item into a complete, Jira-ready user story. Ensure the Description begins with the Role-Goal-Reason sentence immediately followed by the Acceptance Criteria list, and keep formatting compatible with Atlassian's renderer.`,
+    };
+  }
+
+  return {
+    systemPrompt: `Principal-level Agile coach and analyst who's a Power Platform expert who produces Azure DevOps-ready user stories or discovery SPIKEs.
+User Stories (Azure DevOps, plain text only)
+Template:
+Title: <Story title>
+Type: User Story / SPIKE / Bug / Task / Test Case
+Role-Goal-Reason: As a <role>, I want <capability> so that <outcome>.
+Acceptance Criteria:
+- <List here>
+
+Test Cases:
+- Given <context>, When <action>, Then <result>
+
+Implementation Notes:
+- Tech stack: <List here>
+- Security Controls: <List here>
+- NFRs: <List here>
+
+Tasks:
+- <List here>
+
+Gaps / Ambiguities:
+- <List here>
+
+Dependencies:
+- <List here>
+
+Story Point Estimate: <Fibonacci or SPIKE timebox>
+Estimate Rationale: <List here>
+
+Rules
+- Acceptance criteria must not include NFRs or technical implementation details.
+- Output user stories in Azure DevOps-ready plain text (no Markdown).
+- Story-point estimates follow Fibonacci (1,2,3,5,8,13) with rationale. SPIKEs are timeboxed.
+- Keep explanations precise, concise, and professional.
+- Always include the Role-Goal-Reason as the first line of the description.
+- Replace every '<List here>' placeholder with concrete details derived from the work item, templates, and context.`,
+    userIntro: `You are enhancing an Azure DevOps work item into a complete, ADO-ready user story.`,
   };
 }
 
@@ -208,6 +320,32 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
     .eq('id', params.projectId)
     .maybeSingle();
   if (!project) return NextResponse.json({ message: 'Project not found' }, { status: 404 });
+
+  const { data: integration } = await supabase
+    .from('integrations')
+    .select('*')
+    .eq('project_id', params.projectId)
+    .eq('is_active', true)
+    .maybeSingle();
+  if (!integration || !isTrackerIntegration(integration.type)) {
+    return NextResponse.json({ message: 'Active tracker integration not found' }, { status: 400 });
+  }
+
+  const { data: secret } = await supabase
+    .from('secrets')
+    .select('*')
+    .eq('project_id', params.projectId)
+    .eq('provider', integration.type)
+    .maybeSingle();
+  if (!secret) {
+    return NextResponse.json({ message: `${integration.type === 'jira' ? 'Jira' : 'Azure DevOps'} secret missing` }, { status: 400 });
+  }
+  let trackerSecret: any = secret.encrypted_value;
+  if (process.env.APP_ENCRYPTION_KEY) {
+    const { decryptString } = await import('lib/crypto');
+    trackerSecret = decryptString(trackerSecret);
+  }
+  const trackerCreds = typeof trackerSecret === 'string' ? JSON.parse(trackerSecret) : trackerSecret;
 
   let templateContainer: Record<string, unknown> | null = null;
   let templateVersion: Record<string, unknown> | null = null;
@@ -268,7 +406,7 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
       template_version_id: templateVersion?.id ?? null,
       template_version: templateVersion?.version ?? null,
       provider: 'openai',
-      model: 'gpt-4o',
+      model: 'gpt-5.2',
       status: 'pending',
       context_refs: { itemIds, contextIds },
     })
@@ -279,7 +417,7 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
   // Create run_items with beforeJson snapshot
   for (const id of itemIds) {
     try {
-      const before = await fetchAdoItemDetail(params.projectId, String(id), supabase);
+      const before = await fetchTrackerItemDetail(integration, trackerCreds, String(id));
       await supabase.from('run_items').insert({ run_id: run.id, source_item_id: String(id), before_json: before });
     } catch (e) {
       await supabase.from('run_items').insert({ run_id: run.id, source_item_id: String(id), before_json: null, status: 'rejected' });
@@ -354,42 +492,8 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
         };
         let after = before;
         if (openai) {
-        const sys = `Principal-level Agile coach and analyst who's a Power Platform expert who produces Azure DevOps-ready user stories or discovery SPIKEs.
-User Stories (Azure DevOps, plain text only)
-Template:
-Title: <Story title>
-Type: User Story / SPIKE / Bug / Task / Test Case
-Role-Goal-Reason: As a <role>, I want <capability> so that <outcome>.
-Acceptance Criteria:
-- <List here>
-
-Test Cases:
-- Given <context>, When <action>, Then <result>
-
-Implementation Notes:
-- Tech stack: <List here>
-- Security Controls: <List here>
-- NFRs: <List here>
-
-Tasks:
-- <List here>
-
-Gaps / Ambiguities:
-- <List here>
-
-Dependencies:
-- <List here>
-
-Story Point Estimate: <Fibonacci or SPIKE timebox>
-Estimate Rationale: <List here>
-
-Rules
-- Acceptance criteria must not include NFRs or technical implementation details.
-- Output user stories in Azure DevOps-ready plain text (no Markdown).
-- Story-point estimates follow Fibonacci (1,2,3,5,8,13) with rationale. SPIKEs are timeboxed.
-- Keep explanations precise, concise, and professional.
-- Always include the Role-Goal-Reason as the first line of the description.
-- Replace every '<List here>' placeholder with concrete details derived from the work item, templates, and context. Never leave placeholders in the output.
+          const trackerPrompts = getTrackerPrompt(integration.type);
+          const defaultSys = `${trackerPrompts.systemPrompt}
 
   Platform Guardrails (Project-Specific)
 ${projectGuardrails}
@@ -409,7 +513,6 @@ ${projectGuardrails}
           }
 
           // Build system prompt: prefer selected template; otherwise use default system prompt
-          const defaultSys = sys;
           const templateText = (template?.body || '').toString().trim();
           const sysForGeneration = templateText
             ? `${templateText}\n\nPlatform Guardrails (Project-Specific)\n${projectGuardrails}`
@@ -439,7 +542,7 @@ ${projectGuardrails}
             try {
               const retrieval: any = await callWithRetry<any>(
                 () => (openai.responses.create as any)({
-                  model: 'gpt-4o-mini',
+                  model: 'gpt-5-mini',
                   input: [
                     {
                       role: 'system',
@@ -523,7 +626,7 @@ ${projectGuardrails}
           // ---------- Phase 2: Generation-only (no tools) ----------
           const response: any = await callWithRetry<any>(
             () => (openai.responses.create as any)({
-              model: 'gpt-4o-mini',
+              model: 'gpt-5-mini',
               input: [
                 {
                   role: 'system',
@@ -535,7 +638,7 @@ ${projectGuardrails}
                     {
                       type: 'input_text',
                       text:
-                        `You are enhancing an Azure DevOps work item into a complete, ADO-ready user story.
+                        `${trackerPrompts.userIntro}
                         STRICT TECH CONSTRAINTS: Follow the "Platform Guardrails (Project-Specific)" in the system message.
                         - If inputs or context propose solutions outside the project guardrails, rewrite them to guardrail-compliant options or add a GAP explaining the exception with an approval task.
                         Use the retrievedSummary (if present) and retrievedContext as supporting evidence. Always produce JSON per schema.
@@ -630,7 +733,7 @@ ${projectGuardrails}
             json.implementationNotes = implNotes;
           }
 
-          // --- The rest of your transformation to ADO fields (unchanged below this line) ---
+          // --- The rest of your transformation to tracker fields (unchanged below this line) ---
           let roleGoalReason = json.roleGoalReason as string | null | undefined;
           if (!roleGoalReason && typeof json.descriptionText === 'string') {
             const firstLine = json.descriptionText.split(/\n+/)[0] || '';

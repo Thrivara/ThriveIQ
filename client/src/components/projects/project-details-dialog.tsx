@@ -24,6 +24,7 @@ interface ProjectDetailResponse {
     id: string;
     name: string;
     description: string | null;
+    guardrails: string | null;
     status: "active" | "planning" | "review" | "archived";
     itemCount: number;
     memberCount: number;
@@ -165,6 +166,19 @@ export function ProjectDetailsDialog({ open, onOpenChange, projectId, workspaceI
                   }
                 />
               </div>
+
+              <section>
+                <h4 className="text-sm font-semibold text-foreground">Guardrails</h4>
+                <div className="mt-2">
+                  {data.project.guardrails ? (
+                    <p className="whitespace-pre-wrap rounded-md border border-border bg-muted/30 p-3 text-sm text-foreground">
+                      {data.project.guardrails}
+                    </p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No guardrails documented.</p>
+                  )}
+                </div>
+              </section>
 
               <section>
                 <h4 className="text-sm font-semibold text-foreground">Team</h4>

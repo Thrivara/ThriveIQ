@@ -153,7 +153,7 @@ export class EmbeddingsService {
       // If text is short enough, summarize directly
       if (fullText.length <= 4000) {
         const response = await openai.chat.completions.create({
-          model: "gpt-5", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
+          model: "gpt-5.2", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
           messages: [
             {
               role: "user",
@@ -173,7 +173,7 @@ export class EmbeddingsService {
         const chunkText = chunkGroup.map(c => c.text).join('\n\n');
 
         const response = await openai.chat.completions.create({
-          model: "gpt-5", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
+          model: "gpt-5.2", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
           messages: [
             {
               role: "user",
@@ -192,7 +192,7 @@ export class EmbeddingsService {
       // Combine chunk summaries into final summary
       const combinedSummaries = chunkSummaries.join('\n\n');
       const finalResponse = await openai.chat.completions.create({
-        model: "gpt-5", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
+        model: "gpt-5.2", // the newest OpenAI model is "gpt-5" which was released August 7, 2025. do not change this unless explicitly requested by the user
         messages: [
           {
             role: "user",

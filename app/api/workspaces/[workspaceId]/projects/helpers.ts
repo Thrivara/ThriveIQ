@@ -22,6 +22,7 @@ export interface ProjectListItem {
   id: string;
   name: string;
   description: string | null;
+  guardrails: string | null;
   status: ProjectStatus;
   itemCount: number;
   memberCount: number;
@@ -93,6 +94,7 @@ type RawProjectRow = {
   workspace_id: string;
   name: string;
   description: string | null;
+  guardrails: string | null;
   status: ProjectStatus;
   item_count: number;
   member_count: number;
@@ -190,6 +192,7 @@ function toProjectItem(row: RawProjectRow): ProjectListItem {
     id: row.id,
     name: row.name,
     description: row.description,
+    guardrails: row.guardrails,
     status: row.status,
     itemCount: row.item_count,
     memberCount: (row.member_stats?.[0]?.count ?? null) ?? row.member_count,
@@ -283,6 +286,7 @@ export async function fetchWorkspaceProjects(
         name,
         description,
         status,
+        guardrails,
         item_count,
         member_count,
         last_updated,
@@ -321,6 +325,7 @@ export async function fetchProjectDetail(
         name,
         description,
         status,
+        guardrails,
         item_count,
         member_count,
         last_updated,

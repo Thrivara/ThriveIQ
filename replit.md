@@ -62,7 +62,7 @@ Preferred communication style: Simple, everyday language.
 
 ### AI Services
 - **OpenAI**: GPT models for content generation and text embeddings
-- **Model Support**: Configured for GPT-5 with fallback capabilities
+- **Model Support**: Configured for GPT-5.2 with fallback capabilities
 
 ### Third-party Integrations
 - **Atlassian Jira**: Work item synchronization and management via REST API v3

@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, type ReactNode } from "react";
+import { useState, useMemo, useEffect, useRef, type ReactNode } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery } from "@tanstack/react-query";
@@ -13,14 +13,26 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { useMutation } from "@tanstack/react-query";
-import { ClipboardList, ExternalLink, Sparkles, Loader2 } from "lucide-react";
+import { ClipboardList, ExternalLink, Sparkles, Loader2, Undo2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
+
+interface ApplyOverrides {
+  [runItemId: string]: {
+    title?: string;
+    descriptionHtml?: string;
+    storyPoints?: number | null;
+    tasks?: string[];
+    acceptanceList?: string[];
+    testCaseList?: string[];
+  };
+}
 
 interface ApplyOptions {
   selectedFields: string[];
   createTasks: boolean;
   createTestCases: boolean;
   setStoryPoints: boolean;
+  overrides?: ApplyOverrides;
 }
 
 interface ApplyResult {
@@ -46,7 +58,8 @@ interface RunItem {
 }
 
 interface WorkItemSummary {
-  id: number;
+  id: string;
+  key?: string;
   title?: string;
   state?: string;
   type?: string;
@@ -56,7 +69,7 @@ interface WorkItemSummary {
   areaPath?: string | null;
   tags?: string[];
   descriptionPreview?: string;
-  source: string;
+  source: 'ado' | 'jira';
   links: { html: string };
 }
 
@@ -77,10 +90,19 @@ interface WorkItemsResponse {
   filters?: WorkItemFilters;
 }
 
+type EditableRunItemFields = {
+  title: string;
+  descriptionHtml: string;
+  acceptanceCriteriaHtml: string;
+  storyPoints: number | null;
+  tasks: string[];
+};
+
 export default function WorkItems() {
   const { toast } = useToast();
   const { isAuthenticated, isLoading } = useAuth();
-  const { projectId, isLoading: loadingProject } = useCurrentProject();
+  const { projectId, project, isLoading: loadingProject } = useCurrentProject();
+  const trackerType = project?.tracker?.type ?? 'none';
 
   // Always call hooks in the same order; use `enabled` to guard queries
   const [searchInput, setSearchInput] = useState("");
@@ -89,8 +111,8 @@ export default function WorkItems() {
   const [pageSize, setPageSize] = useState(25);
   const [sortBy, setSortBy] = useState<'ChangedDate'|'Title'|'State'|'Type'>("ChangedDate");
   const [sortDir, setSortDir] = useState<'ASC'|'DESC'>("DESC");
-  const [selected, setSelected] = useState<Record<number, boolean>>({});
-  const [detailId, setDetailId] = useState<number|null>(null);
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [detailTarget, setDetailTarget] = useState<{ id: string; source: 'ado' | 'jira' } | null>(null);
   const [showCols, setShowCols] = useState({ id: true, title: true, type: true, state: true, assigned: true, sprint: true, area: false, tags: false, changed: false, link: true });
   const [filterTypes, setFilterTypes] = useState<string[]>([]);
   const [filterStates, setFilterStates] = useState<string[]>([]);
@@ -133,6 +155,7 @@ export default function WorkItems() {
             "/api/projects",
             projectId,
             "work-items",
+            trackerType,
             {
               q,
               page,
@@ -150,6 +173,7 @@ export default function WorkItems() {
         : ["disabled"],
     [
       projectId,
+      trackerType,
       q,
       page,
       pageSize,
@@ -165,7 +189,7 @@ export default function WorkItems() {
   );
   const { data, isLoading: itemsLoading, error, refetch } = useQuery<WorkItemsResponse>({
     queryKey,
-    enabled: !!projectId && isAuthenticated && !isLoading && !loadingProject,
+    enabled: !!projectId && trackerType !== 'none' && isAuthenticated && !isLoading && !loadingProject,
     queryFn: async () => {
       const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize), sortBy, sortDir });
       if (q) params.set('q', q);
@@ -252,6 +276,14 @@ export default function WorkItems() {
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
           <span className="text-foreground">Loading work items...</span>
         </div>
+      </div>
+    );
+  }
+
+  if (trackerType === 'none') {
+    return (
+      <div className="p-6 text-sm text-muted-foreground">
+        Connect a Jira or Azure DevOps integration for this project to browse and enhance work items.
       </div>
     );
   }
@@ -421,7 +453,7 @@ export default function WorkItems() {
               <div className="text-center py-12">
                 <ClipboardList className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
                 <p className="text-lg font-medium mb-2">No work items found</p>
-                <p className="text-muted-foreground">Connect Azure DevOps and try again.</p>
+                <p className="text-muted-foreground">Connect your tracker and try again.</p>
               </div>
             ) : (
               <div className="relative">
@@ -430,11 +462,11 @@ export default function WorkItems() {
                   <thead className="text-left border-b sticky top-0 bg-background z-10">
                     <tr>
                       <th className="py-2 px-2"><input type="checkbox" aria-label="select all" onChange={(e)=>{
-                        const next: Record<number, boolean> = {};
-                        if (e.target.checked) data!.items.forEach((w:any)=> next[w.id]=true);
+                        const next: Record<string, boolean> = {};
+                        if (e.target.checked) data!.items.forEach((w:any)=> next[String(w.id)]=true);
                         setSelected(next);
                       }} /></th>
-                      {showCols.id && <th className="py-2 px-2">ID</th>}
+                      {showCols.id && <th className="py-2 px-2">{trackerType === 'jira' ? 'Key' : 'ID'}</th>}
                       {showCols.title && <th className="py-2 px-2">Title</th>}
                       {showCols.type && <th className="py-2 px-2">Type</th>}
                       {showCols.state && <th className="py-2 px-2">State</th>}
@@ -448,11 +480,11 @@ export default function WorkItems() {
                   </thead>
                   <tbody>
                     {data!.items.map((w:any)=> (
-                      <tr key={w.id} className="border-b hover:bg-muted/50 cursor-pointer" onClick={()=> setDetailId(w.id)}>
+                      <tr key={w.id} className="border-b hover:bg-muted/50 cursor-pointer" onClick={()=> setDetailTarget({ id: String(w.id), source: w.source })}>
                         <td className="py-2 px-2" onClick={(e)=> e.stopPropagation()}>
-                          <input type="checkbox" checked={!!selected[w.id]} onChange={(e)=> setSelected({ ...selected, [w.id]: e.target.checked })} />
+                          <input type="checkbox" checked={!!selected[String(w.id)]} onChange={(e)=> setSelected({ ...selected, [String(w.id)]: e.target.checked })} />
                         </td>
-                        {showCols.id && <td className="py-2 px-2">{w.id}</td>}
+                        {showCols.id && <td className="py-2 px-2">{w.key || w.id}</td>}
                         {showCols.title && <td className="py-2 px-2">
                           <div className="font-medium truncate max-w-[520px]" title={w.title}>{w.title}</div>
                           {w.descriptionPreview && <div className="text-xs text-muted-foreground truncate max-w-[520px]">{w.descriptionPreview}</div>}
@@ -504,16 +536,18 @@ export default function WorkItems() {
             )}
           </CardContent>
         </Card>
-        <Dialog open={detailId!=null} onOpenChange={(o)=> !o && setDetailId(null)}>
+        <Dialog open={detailTarget!=null} onOpenChange={(o)=> !o && setDetailTarget(null)}>
           <DialogContent
             className="sm:max-w-[900px] max-h-[80vh] overflow-y-auto"
             onInteractOutside={(e)=> e.preventDefault()}
             onEscapeKeyDown={(e)=> e.preventDefault()}
           >
             <DialogHeader>
-              <DialogTitle>Work Item #{detailId}</DialogTitle>
+              <DialogTitle>Work Item {detailTarget?.id ? `#${detailTarget.id}` : ''}</DialogTitle>
             </DialogHeader>
-            {detailId!=null && <WorkItemDetails projectId={projectId!} id={detailId} />}
+            {detailTarget!=null && (
+              <WorkItemDetails projectId={projectId!} target={detailTarget} />
+            )}
           </DialogContent>
         </Dialog>
       </div>
@@ -521,15 +555,20 @@ export default function WorkItems() {
   );
 }
 
-function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
+function WorkItemDetails({ projectId, target }: { projectId: string; target: { id: string; source: 'ado' | 'jira' } }) {
   const { data, isLoading, error } = useQuery<any>({
-    queryKey: ['/api/projects', projectId, 'work-items', 'ado', id],
+    queryKey: ['/api/projects', projectId, 'work-items', target.source, target.id],
     queryFn: async () => {
-      const res = await fetch(`/api/projects/${projectId}/work-items/ado/${id}`);
+      const res = await fetch(`/api/projects/${projectId}/work-items/${target.source}/${target.id}`);
       if (!res.ok) throw new Error(await res.text());
       return res.json();
     }
   });
+  const [templateId, setTemplateId] = useState<string>('');
+  const [selectedContexts, setSelectedContexts] = useState<string[]>([]);
+  const [runId, setRunId] = useState<string | null>(null);
+  const [tab, setTab] = useState<'details'|'generate'|'results'>('details');
+  const [debugJson, setDebugJson] = useState<boolean>(false);
   const templatesQ = useQuery<{ id: string; name: string; version: number }[]>({
     queryKey: ['/api/projects', projectId, 'templates', 'published'],
     enabled: !!projectId,
@@ -539,12 +578,25 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
       if (!res.ok) throw new Error(await res.text());
       const json = await res.json();
       const items: any[] = json?.items ?? [];
-      // Only include published versions in the modal
       return items
         .filter(item => item.publishedVersion?.version != null)
         .map(item => ({ id: item.id, name: item.name, version: item.publishedVersion.version }));
     }
   });
+  useEffect(() => {
+    const templates = templatesQ.data || [];
+    if (!templates.length) return;
+    if (templateId) {
+      const exists = templates.some((template) => template.id === templateId);
+      if (exists) return;
+    }
+    const newest = templates.reduce((latest, current) => {
+      if (!latest) return current;
+      if ((current.version ?? 0) > (latest.version ?? 0)) return current;
+      return latest;
+    }, templates[0]);
+    setTemplateId(newest?.id || '');
+  }, [templatesQ.data, templateId]);
   const contextsQ = useQuery<ProjectContext[]>({
     queryKey: ['/api/projects', projectId, 'contexts'],
     queryFn: async () => {
@@ -554,12 +606,6 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
     }
   });
 
-  const [templateId, setTemplateId] = useState<string>('');
-  const [selectedContexts, setSelectedContexts] = useState<string[]>([]);
-  const [runId, setRunId] = useState<string | null>(null);
-  const [tab, setTab] = useState<'details'|'generate'|'results'>('details');
-  const [debugJson, setDebugJson] = useState<boolean>(false);
-  // Persist debug toggle per session
   useEffect(() => {
     const saved = localStorage.getItem('thriveiq.debugJson');
     if (saved != null) setDebugJson(saved === '1');
@@ -571,13 +617,19 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
   const availableContexts = (contextsQ.data ?? []).filter((context) => context.status !== 'deleted');
   const { toast: pushToast } = useToast();
   const workItemLink = typeof data?.link === 'string' ? data.link : undefined;
-  const workItemLabel = data?.title ? `Work Item #${id} – ${data.title}` : `Work Item #${id}`;
+  const workItemLabel = data?.title ? `Work Item ${target.id} – ${data.title}` : `Work Item ${target.id}`;
+
+  const [editableOverrides, setEditableOverrides] = useState<Record<string, EditableRunItemFields>>({});
+
+  useEffect(() => {
+    setEditableOverrides({});
+  }, [runId]);
 
   const generateMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch(`/api/projects/${projectId}/work-items/generate`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ itemIds: [String(id)], templateId: templateId || undefined, contextIds: selectedContexts })
+        body: JSON.stringify({ itemIds: [String(target.id)], templateId: templateId || undefined, contextIds: selectedContexts })
       });
       if (!res.ok) throw new Error(await res.text());
       return res.json();
@@ -606,7 +658,26 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
     }
   });
 
-  // Ensure a final fetch of items right after the run moves to completed
+  useEffect(() => {
+    if (!runItemsQ.data || !runItemsQ.data.length) return;
+    setEditableOverrides((prev) => {
+      const next = { ...prev };
+      runItemsQ.data.forEach((runItem) => {
+        if (!next[runItem.id]) {
+          const after = runItem.after_json || {};
+          next[runItem.id] = {
+            title: after.title ?? '',
+            descriptionHtml: after.descriptionHtml ?? '',
+            acceptanceCriteriaHtml: after.acceptanceCriteriaHtml ?? '',
+            storyPoints: after.enhanced?.storyPoints ?? null,
+            tasks: Array.isArray(after.enhanced?.tasks) ? [...after.enhanced.tasks] : [],
+          };
+        }
+      });
+      return next;
+    });
+  }, [runItemsQ.data]);
+
   useEffect(() => {
     if (runQ.data?.status === 'completed') {
       runItemsQ.refetch();
@@ -616,7 +687,7 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
   const applyMutation = useMutation<ApplyResponse, Error, ApplyOptions>({
     mutationFn: async (opts) => {
       if (!runId) throw new Error('No AI run is available to apply.');
-      const items = (runItemsQ.data ?? []).filter((runItem) => runItem.source_item_id === String(id));
+      const items = (runItemsQ.data ?? []).filter((runItem) => String(runItem.source_item_id) === String(target.id));
       const res = await fetch(`/api/runs/${runId}/apply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -640,14 +711,14 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
               Open work item
             </a>
           ) : (
-            'Azure DevOps accepted the update.'
+            `${target.source === 'jira' ? 'Jira' : 'Azure DevOps'} accepted the update.`
           ),
         });
       }
 
       if (successes.length === 0 && failures.length > 0) {
         pushToast({
-          title: 'Azure DevOps rejected the update',
+          title: `${target.source === 'jira' ? 'Jira' : 'Azure DevOps'} rejected the update`,
           description: failures[0]?.error ?? 'No changes were applied.',
           variant: 'destructive',
         });
@@ -687,7 +758,9 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
             <div className="font-medium">Acceptance Criteria</div>
             <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: data.acceptanceCriteriaHtml }} />
           </>)}
-          <a href={data.link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary"><ExternalLink className="w-4 h-4"/>Open in Azure DevOps</a>
+          <a href={data.link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary">
+            <ExternalLink className="w-4 h-4"/>Open in {target.source === 'jira' ? 'Jira' : 'Azure DevOps'}
+          </a>
         </div>
       </TabsContent>
       <TabsContent value="generate">
@@ -756,27 +829,166 @@ function WorkItemDetails({ projectId, id }: { projectId: string; id: number }) {
         ) : (
           <div className="space-y-4">
             {(() => {
-              const items = (runItemsQ.data||[]);
-              const subset = items.filter((ri)=> String(ri.source_item_id) === String(id));
-              const toShow = subset.length ? subset : items.slice(0,1);
-              return toShow.map((ri:any)=> (
-                <div key={ri.id} className="space-y-6">
-                  <FieldDiff title="Title" beforeText={ri.before_json?.title || ''} afterText={ri.after_json?.title || ''} />
-                  <FieldDiff title="Description" beforeHtml={ri.before_json?.descriptionHtml || ''} afterHtml={ri.after_json?.descriptionHtml || ''} />
-                  <FieldDiff title="Acceptance Criteria" beforeHtml={ri.before_json?.acceptanceCriteriaHtml || ''} afterHtml={ri.after_json?.acceptanceCriteriaHtml || ''} />
-                  {/* Extra sections */}
-                  <FieldList title="Tasks" beforeItems={[]} afterItems={ri.after_json?.enhanced?.tasks || []} />
-                  <FieldList title="Test Cases" beforeItems={[]} afterItems={(ri.after_json?.enhanced?.testCases || []).map((tc:any)=> `Given ${tc.given}, When ${tc.when}, Then ${tc.then}`)} />
-                  {debugJson && (
-                    <div className="grid grid-cols-2 gap-4">
-                      <pre className="text-xs bg-muted p-2 rounded max-h-40 overflow-auto">{JSON.stringify(ri.before_json, null, 2)}</pre>
-                      <pre className="text-xs bg-muted p-2 rounded max-h-40 overflow-auto">{JSON.stringify(ri.after_json, null, 2)}</pre>
+              const items = runItemsQ.data || [];
+              const subset = items.filter((ri) => String(ri.source_item_id) === String(target.id));
+              const toShow = subset.length ? subset : items.slice(0, 1);
+              return toShow.map((ri: any) => {
+                const editable =
+                  editableOverrides[ri.id] ||
+                  {
+                    title: '',
+                    descriptionHtml: '',
+                    acceptanceCriteriaHtml: '',
+                    storyPoints: null,
+                    tasks: [],
+                  };
+                return (
+                  <div key={ri.id} className="space-y-4 rounded-lg border border-border/70 bg-background/50 p-4">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-semibold text-foreground">Generated Updates for #{ri.source_item_id}</div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                      onClick={() => {
+                        const after = ri.after_json || {};
+                        setEditableOverrides((prev) => ({
+                          ...prev,
+                          [ri.id]: {
+                            title: after.title ?? '',
+                            descriptionHtml: after.descriptionHtml ?? '',
+                            acceptanceCriteriaHtml: after.acceptanceCriteriaHtml ?? '',
+                            storyPoints: after.enhanced?.storyPoints ?? null,
+                            tasks: Array.isArray(after.enhanced?.tasks) ? [...after.enhanced.tasks] : [],
+                          },
+                        }));
+                      }}
+                    >
+                        <Undo2 className="mr-1 h-4 w-4" />
+                        Reset
+                      </Button>
                     </div>
-                  )}
-                </div>
-              ));
+
+                  <div className="space-y-2">
+                    <Label>Title</Label>
+                    <Input
+                      value={editable.title}
+                        onChange={(event) =>
+                          setEditableOverrides((prev) => ({
+                            ...prev,
+                            [ri.id]: { ...editable, title: event.target.value },
+                          }))
+                        }
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label>Story Points</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={editable.storyPoints ?? ''}
+                        onChange={(event) => {
+                          const raw = event.target.value;
+                          const numeric = raw === '' ? null : Number(raw);
+                          if (raw === '' || !Number.isNaN(numeric)) {
+                            setEditableOverrides((prev) => ({
+                              ...prev,
+                              [ri.id]: { ...editable, storyPoints: numeric },
+                            }));
+                          }
+                        }}
+                      />
+                    </div>
+
+                    <EditableHtmlSection
+                      label="Description"
+                      value={editable.descriptionHtml}
+                      onChange={(value) =>
+                        setEditableOverrides((prev) => ({
+                          ...prev,
+                          [ri.id]: { ...editable, descriptionHtml: value },
+                        }))
+                      }
+                    />
+
+                    <EditableHtmlSection
+                      label="Acceptance Criteria"
+                      value={editable.acceptanceCriteriaHtml}
+                      onChange={(value) =>
+                        setEditableOverrides((prev) => ({
+                          ...prev,
+                          [ri.id]: { ...editable, acceptanceCriteriaHtml: value },
+                        }))
+                      }
+                    />
+
+                    <div className="space-y-2">
+                      <Label>Implementation Tasks</Label>
+                      <div className="space-y-2">
+                        {(editable.tasks || []).map((task, idx) => (
+                          <div key={idx} className="flex items-center gap-2">
+                            <Input
+                              value={task}
+                              onChange={(event) => {
+                                const nextTasks = [...(editable.tasks || [])];
+                                nextTasks[idx] = event.target.value;
+                                setEditableOverrides((prev) => ({
+                                  ...prev,
+                                  [ri.id]: { ...editable, tasks: nextTasks },
+                                }));
+                              }}
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => {
+                                const nextTasks = (editable.tasks || []).filter((_, i) => i !== idx);
+                                setEditableOverrides((prev) => ({
+                                  ...prev,
+                                  [ri.id]: { ...editable, tasks: nextTasks },
+                                }));
+                              }}
+                            >
+                              ×
+                            </Button>
+                          </div>
+                        ))}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            setEditableOverrides((prev) => ({
+                              ...prev,
+                              [ri.id]: { ...editable, tasks: [...(editable.tasks || []), ''] },
+                            }))
+                          }
+                        >
+                          Add Task
+                        </Button>
+                      </div>
+                      {(!editable.tasks || editable.tasks.length === 0) && (
+                        <p className="text-xs text-muted-foreground">No tasks captured; add one above.</p>
+                      )}
+                    </div>
+
+                    {debugJson && (
+                      <div className="grid grid-cols-2 gap-4">
+                        <pre className="text-xs bg-muted p-2 rounded max-h-40 overflow-auto">{JSON.stringify(ri.before_json, null, 2)}</pre>
+                        <pre className="text-xs bg-muted p-2 rounded max-h-40 overflow-auto">{JSON.stringify(ri.after_json, null, 2)}</pre>
+                      </div>
+                    )}
+                  </div>
+                );
+              });
             })()}
-            <ApplyControls onApply={(opts)=> applyMutation.mutate(opts)} disabled={applyMutation.isPending || !(runItemsQ.data && runItemsQ.data.length)} />
+            <ApplyControls
+              tracker={target.source === 'jira' ? 'jira' : 'azure_devops'}
+              onApply={(opts)=> applyMutation.mutate({ ...opts, overrides: editableOverrides })}
+              disabled={applyMutation.isPending || !(runItemsQ.data && runItemsQ.data.length)}
+            />
           </div>
         )}
       </TabsContent>
@@ -796,87 +1008,38 @@ function DebugToggle() {
   );
 }
 
-function FieldDiff({ title, beforeText, afterText, beforeHtml, afterHtml }: { title: string; beforeText?: string; afterText?: string; beforeHtml?: string; afterHtml?: string }) {
-  // If HTML provided, preserve headings/structure and render side-by-side without inline diff stripping
-  if (beforeHtml !== undefined || afterHtml !== undefined) {
-    return (
-      <div>
-        <div className="text-sm font-semibold mb-2">{title}</div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="rounded border p-2 text-sm bg-red-50 border-red-200">
-            <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: beforeHtml || '<p class="text-muted-foreground"><em>None</em></p>' }} />
-          </div>
-          <div className="rounded border p-2 text-sm bg-green-50 border-green-200">
-            <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: afterHtml || '<p class="text-muted-foreground"><em>None</em></p>' }} />
-          </div>
-        </div>
-      </div>
-    );
-  }
+function EditableHtmlSection({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const editorRef = useRef<HTMLDivElement>(null);
 
-  // Otherwise do word-level diff for plain text
-  const a = beforeText || '';
-  const b = afterText || '';
-  const diff = computeWordDiff(a, b);
-  const renderLine = (parts: DiffPart[], color: 'red'|'green') => (
-    <div className={`rounded border p-2 text-sm ${color==='red'?'bg-red-50 border-red-200':'bg-green-50 border-green-200'}`}>
-      {parts.map((p, idx) => (
-        <span key={idx} className={p.type==='common' ? '' : (p.type==='removed'?'bg-red-100 text-red-800 line-through':'bg-green-100 text-green-800')}>{p.text}</span>
-      ))}
-    </div>
-  );
-  return (
-    <div>
-      <div className="text-sm font-semibold mb-2">{title}</div>
-      <div className="grid grid-cols-2 gap-3">
-        {renderLine(diff.before, 'red')}
-        {renderLine(diff.after, 'green')}
-      </div>
-    </div>
-  );
-}
-
-type DiffPart = { text: string; type: 'common'|'added'|'removed' };
-function computeWordDiff(a: string, b: string): { before: DiffPart[]; after: DiffPart[] } {
-  const ws = /([\s]+)/;
-  const ta = a.split(ws).filter(Boolean);
-  const tb = b.split(ws).filter(Boolean);
-  const m = ta.length, n = tb.length;
-  const dp: number[][] = Array.from({ length: m+1 }, () => Array(n+1).fill(0));
-  for (let i=1;i<=m;i++) {
-    for (let j=1;j<=n;j++) {
-      dp[i][j] = ta[i-1] === tb[j-1] ? dp[i-1][j-1]+1 : Math.max(dp[i-1][j], dp[i][j-1]);
+  useEffect(() => {
+    if (editorRef.current && editorRef.current.innerHTML !== (value || '')) {
+      editorRef.current.innerHTML = value || '';
     }
-  }
-  const before: DiffPart[] = []; const after: DiffPart[] = [];
-  let i=m, j=n;
-  while (i>0 && j>0) {
-    if (ta[i-1] === tb[j-1]) { before.unshift({text: ta[i-1], type:'common'}); after.unshift({text: tb[j-1], type:'common'}); i--; j--; }
-    else if (dp[i-1][j] >= dp[i][j-1]) { before.unshift({text: ta[i-1], type:'removed'}); i--; }
-    else { after.unshift({text: tb[j-1], type:'added'}); j--; }
-  }
-  while (i>0) { before.unshift({text: ta[i-1], type:'removed'}); i--; }
-  while (j>0) { after.unshift({text: tb[j-1], type:'added'}); j--; }
-  return { before, after };
-}
+  }, [value]);
 
-function FieldList({ title, beforeItems, afterItems }: { title: string; beforeItems: string[]; afterItems: string[] }) {
-  const render = (items: string[], color: 'red'|'green') => (
-    <div className={`rounded border p-2 text-sm ${color==='red'?'bg-red-50 border-red-200':'bg-green-50 border-green-200'}`}>
-      {(!items || items.length===0) ? <span className="text-muted-foreground">None</span> : (
-        <ul className="list-disc pl-5">
-          {items.map((t,idx)=> <li key={idx}>{t}</li>)}
-        </ul>
-      )}
-    </div>
-  );
   return (
-    <div>
-      <div className="text-sm font-semibold mb-2">{title}</div>
-      <div className="grid grid-cols-2 gap-3">
-        {render(beforeItems||[], 'red')}
-        {render(afterItems||[], 'green')}
+    <div className="space-y-2">
+      <Label>{label}</Label>
+      <div className="rounded-md border border-border bg-background">
+        <div
+          ref={editorRef}
+          className="min-h-[140px] w-full max-h-[360px] overflow-auto p-3 text-sm focus:outline-none prose prose-sm max-w-none"
+          contentEditable
+          suppressContentEditableWarning
+          onInput={(event) => onChange((event.target as HTMLDivElement).innerHTML)}
+        />
       </div>
+      <p className="text-xs text-muted-foreground">
+        Use the editor above to adjust formatting. Rich text will sync to the tracker as HTML.
+      </p>
     </div>
   );
 }
@@ -1011,7 +1174,15 @@ function typeBadgeClass(type?: string) {
   return '';
 }
 
-function ApplyControls({ onApply, disabled }: { onApply: (opts: ApplyOptions)=> void; disabled: boolean }) {
+function ApplyControls({
+  onApply,
+  disabled,
+  tracker,
+}: {
+  onApply: (opts: ApplyOptions)=> void;
+  disabled: boolean;
+  tracker: 'azure_devops' | 'jira';
+}) {
   const [title, setTitle] = useState(true);
   const [desc, setDesc] = useState(true);
   const [ac, setAc] = useState(true);
@@ -1023,7 +1194,9 @@ function ApplyControls({ onApply, disabled }: { onApply: (opts: ApplyOptions)=> 
       <div className="text-sm flex flex-wrap gap-3">
         <label className="flex items-center gap-1"><input type="checkbox" checked={title} onChange={(e)=> setTitle(e.target.checked)} /> Title</label>
         <label className="flex items-center gap-1"><input type="checkbox" checked={desc} onChange={(e)=> setDesc(e.target.checked)} /> Description</label>
-        <label className="flex items-center gap-1"><input type="checkbox" checked={ac} onChange={(e)=> setAc(e.target.checked)} /> Acceptance/Test</label>
+        {tracker === 'azure_devops' && (
+          <label className="flex items-center gap-1"><input type="checkbox" checked={ac} onChange={(e)=> setAc(e.target.checked)} /> Acceptance/Test</label>
+        )}
         <label className="flex items-center gap-1"><input type="checkbox" checked={tasks} onChange={(e)=> setTasks(e.target.checked)} /> Create Tasks</label>
         <label className="flex items-center gap-1"><input type="checkbox" checked={tcs} onChange={(e)=> setTcs(e.target.checked)} /> Create Test Cases</label>
         <label className="flex items-center gap-1"><input type="checkbox" checked={sp} onChange={(e)=> setSp(e.target.checked)} /> Set Story Points</label>
@@ -1033,7 +1206,7 @@ function ApplyControls({ onApply, disabled }: { onApply: (opts: ApplyOptions)=> 
           const selectedFields = [
             title ? 'title' : null,
             desc ? 'description' : null,
-            ac ? 'acceptance' : null,
+            tracker === 'azure_devops' && ac ? 'acceptance' : null,
           ].filter((field): field is string => typeof field === 'string');
 
           onApply({
