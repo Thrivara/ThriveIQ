@@ -26,13 +26,28 @@ const WORK_ITEM_SCHEMA: any = {
       type: 'array',
       items: {
         type: 'object',
-        additionalProperties: false,
-        properties: {
-          given: { type: 'string' },
-          when: { type: 'string' },
-          then: { type: 'string' },
-        },
-        required: ['given', 'when', 'then'],
+        // Either new format (name + bddScript) OR old format (given + when + then)
+        anyOf: [
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              name: { type: 'string' },
+              bddScript: { type: 'string' },
+            },
+            required: ['name', 'bddScript'],
+          },
+          {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              given: { type: 'string' },
+              when: { type: 'string' },
+              then: { type: 'string' },
+            },
+            required: ['given', 'when', 'then'],
+          },
+        ],
       },
     },
     implementationNotes: { type: 'array', items: { type: 'string' } },
@@ -474,7 +489,23 @@ export async function POST(req: Request, { params }: { params: { projectId: stri
   const openai = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
   const stripHtml = (html?: string) => (html || '').replace(/<[^>]+>/g, '').replace(/\u00A0/g, ' ').trim();
   const bulletsToHtml = (items: string[]) => items.length ? `<ul>\n${items.map(i=>`<li>${i}</li>`).join('\n')}\n</ul>` : '';
-  const testCasesToHtml = (tcs: any[]) => tcs.length ? `<ul>\n${tcs.map(tc=>`<li><strong>Given</strong> ${tc.given}, <strong>When</strong> ${tc.when}, <strong>Then</strong> ${tc.then}</li>`).join('\n')}\n</ul>` : '';
+  
+  // Helper to render test cases to HTML - supports both new (name + bddScript) and legacy (given/when/then) formats
+  const testCasesToHtml = (tcs: any[]) => {
+    if (!tcs.length) return '';
+    return `<ul>\n${tcs.map(tc => {
+      // New format: name + bddScript
+      if (tc.name && tc.bddScript) {
+        return `<li><strong>${tc.name}</strong><br/><pre>${tc.bddScript}</pre></li>`;
+      }
+      // Legacy format: given/when/then
+      if (tc.given && tc.when && tc.then) {
+        return `<li><strong>Given</strong> ${tc.given}, <strong>When</strong> ${tc.when}, <strong>Then</strong> ${tc.then}</li>`;
+      }
+      return '';
+    }).filter(Boolean).join('\n')}\n</ul>`;
+  };
+  
   const extractText = (resp: any): string => {
     // OpenAI Responses API: output_text, or content[0].text
     if (!resp) return '';
@@ -866,32 +897,67 @@ ${projectGuardrails}
           // Remove acceptance criteria from descriptionText to avoid duplication
           // Acceptance criteria are handled separately in acceptanceCriteriaHtml
           if (descriptionText) {
-            // Remove "Acceptance Criteria:" section and everything after it
-            const acMatch = descriptionText.match(/(?:\n|^)\s*(?:Acceptance\s+Criteria|Acceptance Criteria):/i);
-            if (acMatch) {
+            // First, remove "Acceptance Criteria:" section and everything after it (case-insensitive, flexible spacing)
+            // Handle various formats: "Acceptance Criteria:", "*Acceptance Criteria*", "**Acceptance Criteria**", etc.
+            const acMatch = descriptionText.match(/(?:\n|^)\s*(?:\*{0,2}\s*)?(?:Acceptance\s+Criteria|Acceptance Criteria|Acceptance\s+Criteria:?)\s*(?:\*{0,2})?\s*:?\s*/i);
+            if (acMatch && acMatch.index !== undefined) {
               descriptionText = descriptionText.substring(0, acMatch.index).trim();
             }
-            // Also remove any bullet points that look like acceptance criteria
-            // (lines starting with bullet points after role-goal-reason)
+            
+            // Also check for common section headers that indicate we should stop
+            // Handle markdown-style headers with asterisks
+            const sectionHeaders = [
+              /^(?:\*{0,2}\s*)?(?:Test\s+Cases?|Tests?)(?:\s*\*{0,2})?\s*:?/i,
+              /^(?:\*{0,2}\s*)?(?:Implementation\s+Notes?|Implementation)(?:\s*\*{0,2})?\s*:?/i,
+              /^(?:\*{0,2}\s*)?(?:Tasks?)(?:\s*\*{0,2})?\s*:?/i,
+              /^(?:\*{0,2}\s*)?(?:Gaps?\s*\/?\s*Ambiguities?|Gaps?)(?:\s*\*{0,2})?\s*:?/i,
+              /^(?:\*{0,2}\s*)?(?:Dependencies?)(?:\s*\*{0,2})?\s*:?/i,
+              /^(?:\*{0,2}\s*)?(?:Story\s+Points?|Points?)(?:\s*\*{0,2})?\s*:?/i,
+              /^(?:\*{0,2}\s*)?(?:Estimate\s+Rationale|Estimate)(?:\s*\*{0,2})?\s*:?/i,
+              /^(?:\*{0,2}\s*)?(?:Acceptance\s+Criteria|Acceptance Criteria)(?:\s*\*{0,2})?\s*:?/i, // Also catch AC headers in section check
+            ];
+            
             const lines = descriptionText.split(/\n+/);
             const filteredLines: string[] = [];
-            let foundAcSection = false;
+            let foundSectionHeader = false;
+            
             for (const line of lines) {
               const trimmed = line.trim();
-              // Stop if we hit a section header that suggests AC or test cases
-              if (/^(?:Test\s+Cases?|Implementation\s+Notes?|Tasks?|Gaps?|Dependencies?|Story\s+Points?|Estimate)/i.test(trimmed)) {
-                foundAcSection = true;
+              
+              // Check if this line is a section header
+              const isSectionHeader = sectionHeaders.some(regex => regex.test(trimmed));
+              if (isSectionHeader) {
+                foundSectionHeader = true;
+                break; // Stop processing at first section header
               }
-              // Skip bullet points that might be AC (but keep other content)
-              if (!foundAcSection || !/^[-•*]\s+/.test(trimmed)) {
-                if (!foundAcSection) {
-                  filteredLines.push(line);
-                }
-              } else {
-                foundAcSection = true;
+              
+              // If we haven't found a section header yet, include the line
+              if (!foundSectionHeader) {
+                filteredLines.push(line);
               }
             }
+            
             descriptionText = filteredLines.join('\n').trim();
+            
+            // Additionally, remove any lines that match acceptance criteria items (if they exist)
+            // This handles cases where AC might be embedded without a header
+            if (Array.isArray(json.acceptanceCriteria) && json.acceptanceCriteria.length > 0) {
+              const acItems = json.acceptanceCriteria.map((ac: string) => {
+                // Normalize: remove bullets, trim, lowercase for comparison
+                return (typeof ac === 'string' ? ac : String(ac))
+                  .replace(/^[-•*]\s*/, '')
+                  .trim()
+                  .toLowerCase();
+              });
+              
+              const filteredDescLines = descriptionText.split(/\n+/).filter((line: string) => {
+                const normalized = line.replace(/^[-•*]\s*/, '').trim().toLowerCase();
+                // Exclude lines that match any acceptance criteria item
+                return !acItems.some((acItem: string) => normalized === acItem || normalized.includes(acItem));
+              });
+              
+              descriptionText = filteredDescLines.join('\n').trim();
+            }
           }
           const mainDesc = descriptionText ? `<p>${descriptionText.replace(/\n+/g, '</p><p>')}</p>` : '';
           const impl = json.implementationNotes && json.implementationNotes.length
@@ -906,21 +972,40 @@ ${projectGuardrails}
           const gapsHtml = json.gaps && json.gaps.length ? `<h3>Gaps / Ambiguities</h3>${bulletsToHtml(json.gaps)}` : '';
           const depsHtml = json.dependencies && json.dependencies.length ? `<h3>Dependencies</h3>${bulletsToHtml(json.dependencies)}` : '';
           const descHtml = (rgr + mainDesc + impl + estimate + gapsHtml + depsHtml) || before.descriptionHtml || '';
+          
+          // Handle Spike work items differently
+          const isSpike = json.type === 'SPIKE';
+          
           const acHtml =
             (json.acceptanceCriteria && json.acceptanceCriteria.length ? `${bulletsToHtml(json.acceptanceCriteria)}` : '') +
-            (json.testCases && json.testCases.length ? `${testCasesToHtml(json.testCases)}` : '');
+            // Skip test cases in HTML for Spikes
+            (!isSpike && json.testCases && json.testCases.length ? `${testCasesToHtml(json.testCases)}` : '');
 
           const rawTasks = Array.isArray(json.tasks) ? json.tasks.filter((t: unknown): t is string => typeof t === 'string' && t.trim().length > 0) : [];
           const mergedTasks = [...rawTasks];
-          for (const t of STANDARD_ENGINEERING_TASKS) {
-            if (!mergedTasks.some((existing) => existing.toLowerCase() === t.toLowerCase())) {
-              mergedTasks.push(t);
+          
+          if (isSpike) {
+            // For Spikes, replace standard engineering tasks with "Review with Team"
+            if (!mergedTasks.some((existing) => existing.toLowerCase() === 'review with team')) {
+              mergedTasks.push('Review with Team');
+            }
+          } else {
+            // For non-Spikes, add standard engineering tasks
+            for (const t of STANDARD_ENGINEERING_TASKS) {
+              if (!mergedTasks.some((existing) => existing.toLowerCase() === t.toLowerCase())) {
+                mergedTasks.push(t);
+              }
             }
           }
 
+          // Prefix title with "SPIKE:" for Spike work items
+          const finalTitle = isSpike && json.title && !json.title.startsWith('SPIKE:')
+            ? `SPIKE: ${json.title}`
+            : (json.title || before.title);
+
           after = {
             ...before,
-            title: json.title || before.title,
+            title: finalTitle,
             descriptionHtml: descHtml,
             acceptanceCriteriaHtml: acHtml,
             enhanced: {
@@ -928,14 +1013,24 @@ ${projectGuardrails}
               roleGoalReason: roleGoalReason || null,
               descriptionText: json.descriptionText || null,
               acceptanceCriteria: json.acceptanceCriteria || [],
-              testCases: Array.isArray(json.testCases) ? json.testCases.map((tc: any) => {
-                // Strip "Given", "When", "Then" prefixes from test cases to avoid duplication
+              // Skip test cases for Spikes
+              testCases: isSpike ? [] : (Array.isArray(json.testCases) ? json.testCases.map((tc: any) => {
                 if (!tc || typeof tc !== 'object') return tc;
+                
+                // New format: preserve name and bddScript
+                if (tc.name !== undefined || tc.bddScript !== undefined) {
+                  return {
+                    name: typeof tc.name === 'string' ? tc.name.trim() : '',
+                    bddScript: typeof tc.bddScript === 'string' ? tc.bddScript.trim() : '',
+                  };
+                }
+                
+                // Legacy format: strip "Given", "When", "Then" prefixes to avoid duplication
                 const given = typeof tc.given === 'string' ? tc.given.replace(/^Given\s+/i, '').trim() : '';
                 const when = typeof tc.when === 'string' ? tc.when.replace(/^When\s+/i, '').trim() : '';
                 const then = typeof tc.then === 'string' ? tc.then.replace(/^Then\s+/i, '').trim() : '';
                 return { given, when, then };
-              }) : [],
+              }) : []),
               tasks: mergedTasks,
               implementationNotes: json.implementationNotes || [],
               gaps: json.gaps || [],

@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { GitBranch, Plus, Settings, CheckCircle, XCircle, Loader2, TestTube, Trash2, Workflow } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { apiRequest } from "@/lib/queryClient";
@@ -36,6 +36,14 @@ const jiraFormSchema = z.object({
   storyPointsFieldId: z.string().optional(),
   sprintFieldId: z.string().optional(),
   testCaseIssueType: z.string().optional(),
+  // Acceptance Criteria configuration
+  acceptanceCriteriaMapping: z.enum(["description", "custom_field"]).optional().default("description"),
+  acceptanceCriteriaFieldId: z.string().optional(),
+  // Test Cases configuration
+  testCasesMapping: z.enum(["description", "custom_field", "zephyr"]).optional().default("description"),
+  testCasesFieldId: z.string().optional(),
+  // Zephyr Scale API configuration
+  zephyrApiToken: z.string().optional(),
 });
 
 type JiraFormData = z.infer<typeof jiraFormSchema>;
@@ -68,8 +76,15 @@ export default function Integrations() {
       storyPointsFieldId: "",
       sprintFieldId: "",
       testCaseIssueType: "",
+      acceptanceCriteriaMapping: "description",
+      acceptanceCriteriaFieldId: "",
+      testCasesMapping: "description",
+      testCasesFieldId: "",
+      zephyrApiToken: "",
     },
   });
+  const testCasesMapping = useWatch({ control: jiraForm.control, name: "testCasesMapping" });
+  const acceptanceCriteriaMapping = useWatch({ control: jiraForm.control, name: "acceptanceCriteriaMapping" });
   const activeForm = formType === "azure_devops" ? azureForm : jiraForm;
 
   const getTrackerLabel = (type: Integration["type"]) => {
@@ -105,6 +120,7 @@ export default function Integrations() {
         baseUrl,
         email: data.email.trim(),
         apiToken: data.apiToken.trim(),
+        zephyrApiToken: optional(data.zephyrApiToken),
       },
       metadata: {
         baseUrl,
@@ -113,6 +129,10 @@ export default function Integrations() {
         storyPointsFieldId: optional(data.storyPointsFieldId),
         sprintFieldId: optional(data.sprintFieldId),
         testCaseIssueType: optional(data.testCaseIssueType),
+        acceptanceCriteriaMapping: data.acceptanceCriteriaMapping || "description",
+        acceptanceCriteriaFieldId: optional(data.acceptanceCriteriaFieldId),
+        testCasesMapping: data.testCasesMapping || "description",
+        testCasesFieldId: optional(data.testCasesFieldId),
       },
     };
   };
@@ -420,6 +440,103 @@ export default function Integrations() {
           </FormItem>
         )}
       />
+      <div className="border-t pt-4 mt-4">
+        <h3 className="text-sm font-semibold mb-3">Acceptance Criteria Configuration</h3>
+        <FormField
+          control={jiraForm.control}
+          name="acceptanceCriteriaMapping"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Acceptance Criteria Mapping</FormLabel>
+              <Select onValueChange={field.onChange} value={field.value} defaultValue="description">
+                <FormControl>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select mapping option" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value="description">Include in Description (default)</SelectItem>
+                  <SelectItem value="custom_field">Map to Custom Field</SelectItem>
+                </SelectContent>
+              </Select>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        {acceptanceCriteriaMapping === "custom_field" && (
+          <FormField
+            control={jiraForm.control}
+            name="acceptanceCriteriaFieldId"
+            render={({ field }) => (
+              <FormItem className="mt-2">
+                <FormLabel>Acceptance Criteria Field ID</FormLabel>
+                <FormControl>
+                  <Input {...field} placeholder="customfield_10001" data-testid="input-jira-acceptance-field" />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        )}
+      </div>
+      <div className="border-t pt-4 mt-4">
+        <h3 className="text-sm font-semibold mb-3">Test Cases Configuration</h3>
+        <FormField
+          control={jiraForm.control}
+          name="testCasesMapping"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Test Cases Mapping</FormLabel>
+              <Select onValueChange={field.onChange} value={field.value} defaultValue="description">
+                <FormControl>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select mapping option" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value="description">Include in Description (default)</SelectItem>
+                  <SelectItem value="custom_field">Map to Custom Field</SelectItem>
+                  <SelectItem value="zephyr">Create as Zephyr Test Cases</SelectItem>
+                </SelectContent>
+              </Select>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        {testCasesMapping === "custom_field" && (
+          <FormField
+            control={jiraForm.control}
+            name="testCasesFieldId"
+            render={({ field }) => (
+              <FormItem className="mt-2">
+                <FormLabel>Test Cases Field ID</FormLabel>
+                <FormControl>
+                  <Input {...field} placeholder="customfield_10002" data-testid="input-jira-testcases-field" />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        )}
+        {testCasesMapping === "zephyr" && (
+          <FormField
+            control={jiraForm.control}
+            name="zephyrApiToken"
+            render={({ field }) => (
+              <FormItem className="mt-2">
+                <FormLabel>Zephyr Scale API Token (required)</FormLabel>
+                <FormControl>
+                  <Input {...field} type="password" placeholder="Enter Zephyr Scale API token" data-testid="input-zephyr-api-token" />
+                </FormControl>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Get your API token from: Profile → API Tokens in Zephyr Scale
+                </p>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+        )}
+      </div>
     </>
   );
 
@@ -449,105 +566,107 @@ export default function Integrations() {
                 Add Integration
               </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[500px]">
-              <DialogHeader>
+            <DialogContent className="sm:max-w-[500px] max-h-[90vh] flex flex-col">
+              <DialogHeader className="flex-shrink-0">
                 <DialogTitle>{editIntegration ? `Configure ${getTrackerLabel(formType)}` : "Add Tracker Integration"}</DialogTitle>
               </DialogHeader>
-              {formType === "azure_devops" ? (
-                <Form {...azureForm}>
-                  <form onSubmit={azureForm.handleSubmit(handleSubmit)} className="space-y-4">
-                    {!editIntegration && (
-                      <div>
-                        <Label>Integration Type</Label>
-                        <Select
-                          value={formType}
-                          onValueChange={(value) => {
-                            setFormType(value as Integration["type"]);
-                            azureForm.reset();
-                            jiraForm.reset();
-                          }}
+              <div className="flex-1 overflow-y-auto pr-2 -mr-2">
+                {formType === "azure_devops" ? (
+                  <Form {...azureForm}>
+                    <form onSubmit={azureForm.handleSubmit(handleSubmit)} className="space-y-4">
+                      {!editIntegration && (
+                        <div>
+                          <Label>Integration Type</Label>
+                          <Select
+                            value={formType}
+                            onValueChange={(value) => {
+                              setFormType(value as Integration["type"]);
+                              azureForm.reset();
+                              jiraForm.reset();
+                            }}
+                          >
+                            <SelectTrigger className="mt-1">
+                              <SelectValue placeholder="Select tracker" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="azure_devops">Azure DevOps</SelectItem>
+                              <SelectItem value="jira">Jira Cloud</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+                      {renderAzureFields()}
+                      <div className="flex justify-end space-x-2 pt-4 pb-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => setDialogOpen(false)}
+                          data-testid="button-cancel"
                         >
-                          <SelectTrigger className="mt-1">
-                            <SelectValue placeholder="Select tracker" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="azure_devops">Azure DevOps</SelectItem>
-                            <SelectItem value="jira">Jira Cloud</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    )}
-                    {renderAzureFields()}
-                    <div className="flex justify-end space-x-2 pt-4">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setDialogOpen(false)}
-                        data-testid="button-cancel"
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        type="submit"
-                        disabled={createIntegrationMutation.isPending || updateIntegrationMutation.isPending}
-                        data-testid="button-create-integration"
-                      >
-                        {(createIntegrationMutation.isPending || updateIntegrationMutation.isPending) && (
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        )}
-                        {editIntegration ? 'Save Changes' : 'Create Integration'}
-                      </Button>
-                    </div>
-                  </form>
-                </Form>
-              ) : (
-                <Form {...jiraForm}>
-                  <form onSubmit={jiraForm.handleSubmit(handleSubmit)} className="space-y-4">
-                    {!editIntegration && (
-                      <div>
-                        <Label>Integration Type</Label>
-                        <Select
-                          value={formType}
-                          onValueChange={(value) => {
-                            setFormType(value as Integration["type"]);
-                            azureForm.reset();
-                            jiraForm.reset();
-                          }}
+                          Cancel
+                        </Button>
+                        <Button
+                          type="submit"
+                          disabled={createIntegrationMutation.isPending || updateIntegrationMutation.isPending}
+                          data-testid="button-create-integration"
                         >
-                          <SelectTrigger className="mt-1">
-                            <SelectValue placeholder="Select tracker" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="azure_devops">Azure DevOps</SelectItem>
-                            <SelectItem value="jira">Jira Cloud</SelectItem>
-                          </SelectContent>
-                        </Select>
+                          {(createIntegrationMutation.isPending || updateIntegrationMutation.isPending) && (
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          )}
+                          {editIntegration ? 'Save Changes' : 'Create Integration'}
+                        </Button>
                       </div>
-                    )}
-                    {renderJiraFields()}
-                    <div className="flex justify-end space-x-2 pt-4">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setDialogOpen(false)}
-                        data-testid="button-cancel"
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        type="submit"
-                        disabled={createIntegrationMutation.isPending || updateIntegrationMutation.isPending}
-                        data-testid="button-create-integration"
-                      >
-                        {(createIntegrationMutation.isPending || updateIntegrationMutation.isPending) && (
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        )}
-                        {editIntegration ? 'Save Changes' : 'Create Integration'}
-                      </Button>
-                    </div>
-                  </form>
-                </Form>
-              )}
+                    </form>
+                  </Form>
+                ) : (
+                  <Form {...jiraForm}>
+                    <form onSubmit={jiraForm.handleSubmit(handleSubmit)} className="space-y-4">
+                      {!editIntegration && (
+                        <div>
+                          <Label>Integration Type</Label>
+                          <Select
+                            value={formType}
+                            onValueChange={(value) => {
+                              setFormType(value as Integration["type"]);
+                              azureForm.reset();
+                              jiraForm.reset();
+                            }}
+                          >
+                            <SelectTrigger className="mt-1">
+                              <SelectValue placeholder="Select tracker" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="azure_devops">Azure DevOps</SelectItem>
+                              <SelectItem value="jira">Jira Cloud</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      )}
+                      {renderJiraFields()}
+                      <div className="flex justify-end space-x-2 pt-4 pb-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => setDialogOpen(false)}
+                          data-testid="button-cancel"
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          type="submit"
+                          disabled={createIntegrationMutation.isPending || updateIntegrationMutation.isPending}
+                          data-testid="button-create-integration"
+                        >
+                          {(createIntegrationMutation.isPending || updateIntegrationMutation.isPending) && (
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          )}
+                          {editIntegration ? 'Save Changes' : 'Create Integration'}
+                        </Button>
+                      </div>
+                    </form>
+                  </Form>
+                )}
+              </div>
             </DialogContent>
           </Dialog>
         </div>
@@ -678,6 +797,11 @@ export default function Integrations() {
                               storyPointsFieldId: meta?.storyPointsFieldId || "",
                               sprintFieldId: meta?.sprintFieldId || "",
                               testCaseIssueType: meta?.testCaseIssueType || "",
+                              acceptanceCriteriaMapping: meta?.acceptanceCriteriaMapping || "description",
+                              acceptanceCriteriaFieldId: meta?.acceptanceCriteriaFieldId || "",
+                              testCasesMapping: meta?.testCasesMapping || "description",
+                              testCasesFieldId: meta?.testCasesFieldId || "",
+                              zephyrApiToken: "",
                             });
                           }
                           setDialogOpen(true);

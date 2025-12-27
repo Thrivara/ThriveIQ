@@ -23,7 +23,10 @@ interface ApplyOverrides {
     storyPoints?: number | null;
     tasks?: string[];
     acceptanceCriteria?: string[];
-    testCases?: Array<{ given: string; when: string; then: string }>;
+    testCases?: Array<
+      | { name: string; bddScript: string }
+      | { given: string; when: string; then: string }
+    >;
   };
 }
 
@@ -43,6 +46,11 @@ interface ApplyResult {
 
 interface ApplyResponse {
   results: ApplyResult[];
+  summary?: {
+    subtasksCreated?: number;
+    testCasesCreated?: number;
+    testCasesUpdated?: number;
+  };
 }
 
 interface ProjectContext {
@@ -116,7 +124,10 @@ export default function WorkItems() {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [detailTarget, setDetailTarget] = useState<{ id: string; source: 'ado' | 'jira' } | null>(null);
   const [showCols, setShowCols] = useState({ id: true, title: true, type: true, state: true, assigned: true, sprint: true, area: false, tags: false, changed: false, link: true });
+  // Default filter type based on tracker: "User Story" for Azure DevOps, "Story" for Jira
+  const defaultType = trackerType === 'jira' ? 'Story' : 'User Story';
   const [filterTypes, setFilterTypes] = useState<string[]>([]);
+  const [hasInitializedDefault, setHasInitializedDefault] = useState(false);
   const [filterStates, setFilterStates] = useState<string[]>([]);
   const [filterAssigned, setFilterAssigned] = useState<string[]>([]);
   const [filterIterations, setFilterIterations] = useState<string[]>([]);
@@ -256,6 +267,15 @@ export default function WorkItems() {
     () => buildFilterOptions(baseFilters?.tags, filterTags, fallbackFilters.tags),
     [baseFilters?.tags, filterTags, fallbackFilters.tags],
   );
+
+  // Ensure the default type (User Story for Azure DevOps, Story for Jira) is always selected by default when data is available
+  // Only set default once on initial load when data becomes available
+  useEffect(() => {
+    if (!hasInitializedDefault && data?.filters?.types && data.filters.types.includes(defaultType) && filterTypes.length === 0) {
+      setFilterTypes([defaultType]);
+      setHasInitializedDefault(true);
+    }
+  }, [data?.filters?.types, defaultType, filterTypes.length, hasInitializedDefault]);
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -548,7 +568,7 @@ export default function WorkItems() {
               <DialogTitle>Work Item {detailTarget?.id ? `#${detailTarget.id}` : ''}</DialogTitle>
             </DialogHeader>
             {detailTarget!=null && (
-              <WorkItemDetails projectId={projectId!} target={detailTarget} />
+              <WorkItemDetails projectId={projectId!} target={detailTarget} onClose={() => setDetailTarget(null)} />
             )}
           </DialogContent>
         </Dialog>
@@ -557,7 +577,7 @@ export default function WorkItems() {
   );
 }
 
-function WorkItemDetails({ projectId, target }: { projectId: string; target: { id: string; source: 'ado' | 'jira' } }) {
+function WorkItemDetails({ projectId, target, onClose }: { projectId: string; target: { id: string; source: 'ado' | 'jira' }; onClose: () => void }) {
   const { data, isLoading, error } = useQuery<any>({
     queryKey: ['/api/projects', projectId, 'work-items', target.source, target.id],
     queryFn: async () => {
@@ -571,6 +591,7 @@ function WorkItemDetails({ projectId, target }: { projectId: string; target: { i
   const [runId, setRunId] = useState<string | null>(null);
   const [tab, setTab] = useState<'details'|'generate'|'results'>('details');
   const [debugJson, setDebugJson] = useState<boolean>(false);
+  const [showCloseAfterApply, setShowCloseAfterApply] = useState<boolean>(false);
   const templatesQ = useQuery<{ id: string; name: string; version: number }[]>({
     queryKey: ['/api/projects', projectId, 'templates', 'published'],
     enabled: !!projectId,
@@ -629,14 +650,71 @@ function WorkItemDetails({ projectId, target }: { projectId: string; target: { i
 
   const generateMutation = useMutation({
     mutationFn: async () => {
-      const res = await fetch(`/api/projects/${projectId}/work-items/generate`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ itemIds: [String(target.id)], templateId: templateId || undefined, contextIds: selectedContexts })
-      });
-      if (!res.ok) throw new Error(await res.text());
-      return res.json();
+      console.log('[Generate] Starting - Real work begins now for ~30s');
+      setGenerateProgress({ show: true, step: 0, message: 'Gathering context from work item...', progress: 10 });
+      
+      // Progress through realistic steps during the actual API call (~30 seconds)
+      const steps = [
+        { message: 'Gathering context from work item...', progress: 10, delay: 0 },
+        { message: 'Retrieving project context...', progress: 20, delay: 3 },
+        { message: 'Analyzing requirements...', progress: 35, delay: 7 },
+        { message: 'Crafting user story...', progress: 50, delay: 12 },
+        { message: 'Adding acceptance criteria...', progress: 65, delay: 18 },
+        { message: 'Generating test cases...', progress: 75, delay: 23 },
+        { message: 'Polishing details...', progress: 85, delay: 27 },
+      ];
+      
+      const startTime = Date.now();
+      const progressInterval = setInterval(() => {
+        const elapsed = (Date.now() - startTime) / 1000;
+        
+        // Find the appropriate step based on elapsed time
+        let currentStep = steps[0];
+        for (let i = steps.length - 1; i >= 0; i--) {
+          if (elapsed >= steps[i].delay) {
+            currentStep = steps[i];
+            break;
+          }
+        }
+        
+        setGenerateProgress(prev => {
+          if (!prev) return null;
+          if (prev.message !== currentStep.message || prev.progress !== currentStep.progress) {
+            console.log(`[Generate] ${currentStep.message} (${currentStep.progress}%) at ${elapsed.toFixed(1)}s`);
+            return { ...prev, message: currentStep.message, progress: currentStep.progress };
+          }
+          return prev;
+        });
+      }, 500);
+      
+      try {
+        const res = await fetch(`/api/projects/${projectId}/work-items/generate`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ itemIds: [String(target.id)], templateId: templateId || undefined, contextIds: selectedContexts })
+        });
+        
+        clearInterval(progressInterval);
+        const elapsed = (Date.now() - startTime) / 1000;
+        console.log(`[Generate] API returned after ${elapsed.toFixed(1)}s`);
+        
+        if (!res.ok) throw new Error(await res.text());
+        return res.json();
+      } catch (error) {
+        clearInterval(progressInterval);
+        throw error;
+      }
     },
-    onSuccess: (r) => { setRunId(r.runId); setTab('results'); }
+    onSuccess: (r) => { 
+      console.log('[Generate] onSuccess - Finalizing');
+      setRunId(r.runId); 
+      setTab('results');
+      // Show finalizing step briefly before checking for completion
+      setGenerateProgress({ show: true, step: 7, message: 'Finalizing...', progress: 95 });
+    },
+    onError: () => {
+      console.log('[Generate] onError - Clearing progress');
+      setGenerateProgress(null);
+    }
   });
 
   const runQ = useQuery<any>({
@@ -683,16 +761,38 @@ function WorkItemDetails({ projectId, target }: { projectId: string; target: { i
     });
   }, [runItemsQ.data]);
 
+  const [applyProgress, setApplyProgress] = useState<{ show: boolean; message: string } | null>(null);
+  const [applySummary, setApplySummary] = useState<{ show: boolean; result: any } | null>(null);
+  const [generateProgress, setGenerateProgress] = useState<{ show: boolean; step: number; message: string; progress: number } | null>(null);
+
+  // Debug logging for showCloseAfterApply
+  useEffect(() => {
+    console.log('[WorkItemDetails] showCloseAfterApply changed to:', showCloseAfterApply);
+  }, [showCloseAfterApply]);
+
+  // Watch for run completion - most work happens during initial API call now
   useEffect(() => {
     if (runQ.data?.status === 'completed') {
+      console.log('[Progress] Run completed - showing success');
       runItemsQ.refetch();
+      setGenerateProgress({ show: true, step: 8, message: 'Complete! 🎉', progress: 100 });
+      setTimeout(() => {
+        setGenerateProgress(null);
+      }, 1500);
+    } else if (runQ.data?.status === 'failed') {
+      console.log('[Progress] Run failed - clearing progress');
+      setGenerateProgress(null);
     }
-  }, [runQ.data?.status]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runQ.data?.status]); // Only depend on status, not the entire runItemsQ object
 
   const applyMutation = useMutation<ApplyResponse, Error, ApplyOptions>({
     mutationFn: async (opts) => {
       if (!runId) throw new Error('No AI run is available to apply.');
       const items = (runItemsQ.data ?? []).filter((runItem) => String(runItem.source_item_id) === String(target.id));
+      
+      setApplyProgress({ show: true, message: 'Applying changes to work item...' });
+      
       const res = await fetch(`/api/runs/${runId}/apply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -705,31 +805,31 @@ function WorkItemDetails({ projectId, target }: { projectId: string; target: { i
       return res.json();
     },
     onSuccess: (result) => {
+      setApplyProgress(null);
       const successes = result.results.filter((entry) => entry.success);
       const failures = result.results.filter((entry) => !entry.success);
 
-      if (successes.length > 0) {
-        pushToast({
-          title: successes.length > 1 ? 'Changes applied to work items' : `Changes applied to ${workItemLabel}`,
-          description: workItemLink ? (
-            <a href={workItemLink} target="_blank" rel="noreferrer" className="text-primary underline">
-              Open work item
-            </a>
-          ) : (
-            `${target.source === 'jira' ? 'Jira' : 'Azure DevOps'} accepted the update.`
-          ),
-        });
-      }
-
-      if (successes.length === 0 && failures.length > 0) {
-        pushToast({
-          title: `${target.source === 'jira' ? 'Jira' : 'Azure DevOps'} rejected the update`,
-          description: failures[0]?.error ?? 'No changes were applied.',
-          variant: 'destructive',
-        });
-      }
+      // Show summary dialog with success message and link
+      console.log('Apply result summary:', result.summary); // Debug log
+      setApplySummary({
+        show: true,
+        result: {
+          successes: successes.length,
+          failures: failures.length,
+          total: result.results.length,
+          errors: failures.map((f: any) => f.error).filter(Boolean),
+          successMessage: successes.length > 0 
+            ? (successes.length > 1 ? 'Changes applied to work items' : `Changes applied to ${workItemLabel}`)
+            : null,
+          workItemLink: workItemLink || undefined,
+          trackerName: target.source === 'jira' ? 'Jira' : 'Azure DevOps',
+          summary: result.summary || {}, // Ensure summary is passed
+        },
+      });
+      console.log('ApplySummary set with:', { summary: result.summary }); // Debug log
     },
     onError: (err) => {
+      setApplyProgress(null);
       pushToast({
         title: 'Failed to apply changes',
         description: err.message,
@@ -996,51 +1096,95 @@ function WorkItemDetails({ projectId, target }: { projectId: string; target: { i
                               </Button>
                             </div>
                             <div className="space-y-2">
-                              <div>
-                                <Label className="text-xs">Given</Label>
-                                <Input
-                                  value={tc.given || ''}
-                                  onChange={(event) => {
-                                    const nextTcs = [...(editable.testCases || [])];
-                                    nextTcs[idx] = { ...tc, given: event.target.value };
-                                    setEditableOverrides((prev) => ({
-                                      ...prev,
-                                      [ri.id]: { ...editable, testCases: nextTcs },
-                                    }));
-                                  }}
-                                  placeholder="Given condition"
-                                />
-                              </div>
-                              <div>
-                                <Label className="text-xs">When</Label>
-                                <Input
-                                  value={tc.when || ''}
-                                  onChange={(event) => {
-                                    const nextTcs = [...(editable.testCases || [])];
-                                    nextTcs[idx] = { ...tc, when: event.target.value };
-                                    setEditableOverrides((prev) => ({
-                                      ...prev,
-                                      [ri.id]: { ...editable, testCases: nextTcs },
-                                    }));
-                                  }}
-                                  placeholder="When action"
-                                />
-                              </div>
-                              <div>
-                                <Label className="text-xs">Then</Label>
-                                <Input
-                                  value={tc.then || ''}
-                                  onChange={(event) => {
-                                    const nextTcs = [...(editable.testCases || [])];
-                                    nextTcs[idx] = { ...tc, then: event.target.value };
-                                    setEditableOverrides((prev) => ({
-                                      ...prev,
-                                      [ri.id]: { ...editable, testCases: nextTcs },
-                                    }));
-                                  }}
-                                  placeholder="Then expected result"
-                                />
-                              </div>
+                              {/* Support both new format (name + bddScript) and legacy (given/when/then) */}
+                              {('name' in tc && 'bddScript' in tc) ? (
+                                // New Zephyr format
+                                <>
+                                  <div>
+                                    <Label className="text-xs">Test Case Name</Label>
+                                    <Input
+                                      value={('name' in tc ? (tc as { name: string; bddScript: string }).name : '') || ''}
+                                      onChange={(event) => {
+                                        const nextTcs: Array<{ name: string; bddScript: string } | { given: string; when: string; then: string }> = [...(editable.testCases || [])];
+                                        const currentTc = tc as { name: string; bddScript: string };
+                                        nextTcs[idx] = { name: event.target.value, bddScript: currentTc.bddScript || '' };
+                                        setEditableOverrides((prev) => ({
+                                          ...prev,
+                                          [ri.id]: { ...editable, testCases: nextTcs },
+                                        }));
+                                      }}
+                                      placeholder="Short descriptive test case name"
+                                    />
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs">BDD Test Script (Gherkin)</Label>
+                                    <textarea
+                                      value={('bddScript' in tc ? (tc as { name: string; bddScript: string }).bddScript : '') || ''}
+                                      onChange={(event) => {
+                                        const nextTcs: Array<{ name: string; bddScript: string } | { given: string; when: string; then: string }> = [...(editable.testCases || [])];
+                                        const currentTc = tc as { name: string; bddScript: string };
+                                        nextTcs[idx] = { name: currentTc.name || '', bddScript: event.target.value };
+                                        setEditableOverrides((prev) => ({
+                                          ...prev,
+                                          [ri.id]: { ...editable, testCases: nextTcs },
+                                        }));
+                                      }}
+                                      rows={6}
+                                      placeholder="Given...&#10;When...&#10;Then..."
+                                      className="flex min-h-[60px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 font-mono"
+                                    />
+                                  </div>
+                                </>
+                              ) : (
+                                // Legacy format (given/when/then)
+                                <>
+                                  <div>
+                                    <Label className="text-xs">Given</Label>
+                                    <Input
+                                      value={tc.given || ''}
+                                      onChange={(event) => {
+                                        const nextTcs = [...(editable.testCases || [])];
+                                        nextTcs[idx] = { ...tc, given: event.target.value };
+                                        setEditableOverrides((prev) => ({
+                                          ...prev,
+                                          [ri.id]: { ...editable, testCases: nextTcs },
+                                        }));
+                                      }}
+                                      placeholder="Given condition"
+                                    />
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs">When</Label>
+                                    <Input
+                                      value={tc.when || ''}
+                                      onChange={(event) => {
+                                        const nextTcs = [...(editable.testCases || [])];
+                                        nextTcs[idx] = { ...tc, when: event.target.value };
+                                        setEditableOverrides((prev) => ({
+                                          ...prev,
+                                          [ri.id]: { ...editable, testCases: nextTcs },
+                                        }));
+                                      }}
+                                      placeholder="When action"
+                                    />
+                                  </div>
+                                  <div>
+                                    <Label className="text-xs">Then</Label>
+                                    <Input
+                                      value={tc.then || ''}
+                                      onChange={(event) => {
+                                        const nextTcs = [...(editable.testCases || [])];
+                                        nextTcs[idx] = { ...tc, then: event.target.value };
+                                        setEditableOverrides((prev) => ({
+                                          ...prev,
+                                          [ri.id]: { ...editable, testCases: nextTcs },
+                                        }));
+                                      }}
+                                      placeholder="Then expected result"
+                                    />
+                                  </div>
+                                </>
+                              )}
                             </div>
                           </div>
                         ))}
@@ -1128,10 +1272,167 @@ function WorkItemDetails({ projectId, target }: { projectId: string; target: { i
               tracker={target.source === 'jira' ? 'jira' : 'azure_devops'}
               onApply={(opts)=> applyMutation.mutate({ ...opts, overrides: editableOverrides })}
               disabled={applyMutation.isPending || !(runItemsQ.data && runItemsQ.data.length)}
+              isLoading={applyMutation.isPending}
+              showCloseButton={showCloseAfterApply}
+              onClose={() => {
+                setShowCloseAfterApply(false);
+                onClose();
+              }}
             />
           </div>
         )}
       </TabsContent>
+      
+      {/* Generate Progress Dialog */}
+      {generateProgress && generateProgress.show && (
+        <Dialog open={true} onOpenChange={() => {}}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-purple-600" />
+                <span>ThriveIQ is working its magic ✨</span>
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-medium text-foreground">{generateProgress.message}</span>
+                  <span className="text-muted-foreground">{generateProgress.progress}%</span>
+                </div>
+                <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-r from-purple-600 to-indigo-700 rounded-full transition-all duration-500 ease-out"
+                    style={{ width: `${generateProgress.progress}%` }}
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>This usually takes 10-30 seconds...</span>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Apply Progress Dialog */}
+      {applyProgress && applyProgress.show && (
+        <Dialog open={true} onOpenChange={() => {}}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Applying Changes</DialogTitle>
+            </DialogHeader>
+            <div className="flex items-center gap-4 py-4">
+              <Loader2 className="h-6 w-6 animate-spin text-primary" />
+              <p className="text-sm text-muted-foreground">{applyProgress.message}</p>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+    
+      {/* Summary Dialog */}
+      {applySummary && applySummary.show && (
+        <Dialog open={true} onOpenChange={(open) => {
+          if (!open) {
+            console.log('[Summary Dialog] Closing, setting showCloseAfterApply to true');
+            setApplySummary(null);
+            setShowCloseAfterApply(true); // Show close button in main dialog
+          }
+        }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <span className="text-2xl">🎉</span>
+                <span>All set!</span>
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              {/* Success Message */}
+              {applySummary.result.successMessage && (
+                <div className="p-3 bg-green-50 dark:bg-green-950/20 border border-green-200 dark:border-green-900 rounded-md">
+                  <p className="text-sm font-medium text-green-800 dark:text-green-200">
+                    {applySummary.result.successMessage}
+                  </p>
+                  {applySummary.result.workItemLink && (
+                    <a 
+                      href={applySummary.result.workItemLink} 
+                      target="_blank" 
+                      rel="noreferrer" 
+                      className="text-sm text-green-700 dark:text-green-300 underline mt-2 inline-block"
+                    >
+                      Open work item →
+                    </a>
+                  )}
+                  {!applySummary.result.workItemLink && applySummary.result.trackerName && (
+                    <p className="text-sm text-green-700 dark:text-green-300 mt-2">
+                      {applySummary.result.trackerName} accepted the update.
+                    </p>
+                  )}
+                </div>
+              )}
+              
+              {/* Summary Stats */}
+              {applySummary.result.summary && (
+                <div className="space-y-3">
+                  {(applySummary.result.summary.subtasksCreated ?? 0) > 0 && (
+                    <div className="flex items-center justify-between p-2 bg-blue-50 dark:bg-blue-950/20 rounded-md">
+                      <span className="text-sm font-medium">Sub-tasks Created:</span>
+                      <span className="text-sm font-semibold text-blue-700 dark:text-blue-300">{applySummary.result.summary.subtasksCreated}</span>
+                    </div>
+                  )}
+                  {((applySummary.result.summary.testCasesCreated ?? 0) > 0 || (applySummary.result.summary.testCasesUpdated ?? 0) > 0) && (
+                    <div className="space-y-2 p-2 bg-purple-50 dark:bg-purple-950/20 rounded-md">
+                      {(applySummary.result.summary.testCasesCreated ?? 0) > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">Test Cases Created:</span>
+                          <span className="text-sm font-semibold text-purple-700 dark:text-purple-300">{applySummary.result.summary.testCasesCreated}</span>
+                        </div>
+                      )}
+                      {(applySummary.result.summary.testCasesUpdated ?? 0) > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">Test Cases Updated:</span>
+                          <span className="text-sm font-semibold text-purple-700 dark:text-purple-300">{applySummary.result.summary.testCasesUpdated}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {(applySummary.result.failures ?? 0) > 0 && (
+                    <div className="flex items-center justify-between p-2 bg-red-50 dark:bg-red-950/20 rounded-md">
+                      <span className="text-sm font-medium text-red-600">Failed:</span>
+                      <span className="text-sm font-semibold text-red-600">{applySummary.result.failures}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {/* Errors */}
+              {applySummary.result.errors && applySummary.result.errors.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Errors:</p>
+                  <div className="max-h-32 overflow-y-auto space-y-1">
+                    {applySummary.result.errors.map((error: string, idx: number) => (
+                      <p key={idx} className="text-xs text-red-600 bg-red-50 dark:bg-red-950/20 p-2 rounded">
+                        {error}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              <Button
+                onClick={() => {
+                  console.log('[Summary Modal Close Button] Setting showCloseAfterApply to true');
+                  setApplySummary(null);
+                  setShowCloseAfterApply(true);
+                }}
+                className="w-full"
+              >
+                Close
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </Tabs>
   );
 }
@@ -1318,10 +1619,16 @@ function ApplyControls({
   onApply,
   disabled,
   tracker,
+  isLoading,
+  showCloseButton,
+  onClose,
 }: {
   onApply: (opts: ApplyOptions)=> void;
   disabled: boolean;
   tracker: 'azure_devops' | 'jira';
+  isLoading?: boolean;
+  showCloseButton?: boolean;
+  onClose?: () => void;
 }) {
   const [title, setTitle] = useState(true);
   const [desc, setDesc] = useState(true);
@@ -1332,34 +1639,54 @@ function ApplyControls({
   return (
     <div className="flex items-center justify-between">
       <div className="text-sm flex flex-wrap gap-3">
-        <label className="flex items-center gap-1"><input type="checkbox" checked={title} onChange={(e)=> setTitle(e.target.checked)} /> Title</label>
-        <label className="flex items-center gap-1"><input type="checkbox" checked={desc} onChange={(e)=> setDesc(e.target.checked)} /> Description</label>
+        <label className="flex items-center gap-1"><input type="checkbox" checked={title} onChange={(e)=> setTitle(e.target.checked)} disabled={isLoading} /> Title</label>
+        <label className="flex items-center gap-1"><input type="checkbox" checked={desc} onChange={(e)=> setDesc(e.target.checked)} disabled={isLoading} /> Description</label>
         {tracker === 'azure_devops' && (
-          <label className="flex items-center gap-1"><input type="checkbox" checked={ac} onChange={(e)=> setAc(e.target.checked)} /> Acceptance/Test</label>
+          <label className="flex items-center gap-1"><input type="checkbox" checked={ac} onChange={(e)=> setAc(e.target.checked)} disabled={isLoading} /> Acceptance/Test</label>
         )}
-        <label className="flex items-center gap-1"><input type="checkbox" checked={tasks} onChange={(e)=> setTasks(e.target.checked)} /> Create Tasks</label>
-        <label className="flex items-center gap-1"><input type="checkbox" checked={tcs} onChange={(e)=> setTcs(e.target.checked)} /> Create Test Cases</label>
-        <label className="flex items-center gap-1"><input type="checkbox" checked={sp} onChange={(e)=> setSp(e.target.checked)} /> Set Story Points</label>
+        <label className="flex items-center gap-1"><input type="checkbox" checked={tasks} onChange={(e)=> setTasks(e.target.checked)} disabled={isLoading} /> Create Tasks</label>
+        <label className="flex items-center gap-1"><input type="checkbox" checked={tcs} onChange={(e)=> setTcs(e.target.checked)} disabled={isLoading} /> Create Test Cases</label>
+        <label className="flex items-center gap-1"><input type="checkbox" checked={sp} onChange={(e)=> setSp(e.target.checked)} disabled={isLoading} /> Set Story Points</label>
       </div>
-      <Button
-        onClick={() => {
-          const selectedFields = [
-            title ? 'title' : null,
-            desc ? 'description' : null,
-            tracker === 'azure_devops' && ac ? 'acceptance' : null,
-          ].filter((field): field is string => typeof field === 'string');
+      <div className="flex items-center gap-2">
+        <Button
+          onClick={() => {
+            const selectedFields = [
+              title ? 'title' : null,
+              desc ? 'description' : null,
+              tracker === 'azure_devops' && ac ? 'acceptance' : null,
+            ].filter((field): field is string => typeof field === 'string');
 
-          onApply({
-            selectedFields,
-            createTasks: tasks,
-            createTestCases: tcs,
-            setStoryPoints: sp,
-          });
-        }}
-        disabled={disabled}
-      >
-        Apply Changes
-      </Button>
+            onApply({
+              selectedFields,
+              createTasks: tasks,
+              createTestCases: tcs,
+              setStoryPoints: sp,
+            });
+          }}
+          disabled={disabled || isLoading}
+        >
+          {isLoading ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Applying...
+            </>
+          ) : (
+            'Apply Changes'
+          )}
+        </Button>
+        {showCloseButton && onClose && (
+          <Button
+            variant="outline"
+            onClick={() => {
+              console.log('[Close Button] Clicked');
+              onClose();
+            }}
+          >
+            Close
+          </Button>
+        )}
+      </div>
     </div>
   );
 }
