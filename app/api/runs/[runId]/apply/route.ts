@@ -773,47 +773,17 @@ async function createZephyrTestCases(
         // New Zephyr format with name and BDD script
         testCaseName = tc.name;
         
-        // Parse BDD script to extract Given/When/Then for Zephyr steps
-        const bddLines = tc.bddScript.split('\n').map((l: string) => l.trim()).filter(Boolean);
-        const steps: any[] = [];
-        
-        for (const line of bddLines) {
-          if (line.startsWith('Given')) {
-            steps.push({
-              description: line,
-              expectedResult: 'Precondition is met'
-            });
-          } else if (line.startsWith('When')) {
-            steps.push({
-              description: line,
-              expectedResult: 'Action is performed'
-            });
-          } else if (line.startsWith('Then')) {
-            steps.push({
-              description: line,
-              expectedResult: line.replace(/^Then\s+/, '')
-            });
-          } else if (line.startsWith('And')) {
-            // And statements continue the previous step type
-            steps.push({
-              description: line,
-              expectedResult: 'Condition met'
-            });
-          }
-        }
-        
+        // Use BDD format for Zephyr when we have BDD script
         testCasePayload = {
           projectKey: projectKey,
           name: testCaseName,
           objective: `Verify: ${testCaseName}`,
           testScript: {
-            type: 'STEP_BY_STEP',
-            steps: steps.length > 0 ? steps : [{
-              description: tc.bddScript,
-              expectedResult: 'Test passes'
-            }]
+            type: 'BDD',
+            text: tc.bddScript.trim()
           }
         };
+        console.log(`Creating Zephyr test case with BDD format: "${testCaseName}"`);
       } else if (tc.given && tc.when && tc.then) {
         // Legacy format for backward compatibility (Azure DevOps, etc.)
         testCaseName = `Given ${tc.given}, When ${tc.when}, Then ${tc.then}`;
