@@ -83,7 +83,16 @@ export async function POST(req: Request, { params }: { params: { runId: string }
           after.enhanced.testCases = override.testCases
             .map((tc: any) => {
               if (!tc || typeof tc !== 'object') return null;
-              // Strip "Given", "When", "Then" prefixes to avoid duplication
+              
+              // Support new format (name + bddScript)
+              if (tc.name !== undefined || tc.bddScript !== undefined) {
+                const name = typeof tc.name === 'string' ? tc.name.trim() : '';
+                const bddScript = typeof tc.bddScript === 'string' ? tc.bddScript.trim() : '';
+                if (!name && !bddScript) return null;
+                return { name, bddScript };
+              }
+              
+              // Legacy format (given/when/then)
               let given = typeof tc.given === 'string' ? tc.given.trim() : '';
               let when = typeof tc.when === 'string' ? tc.when.trim() : '';
               let then = typeof tc.then === 'string' ? tc.then.trim() : '';
@@ -94,7 +103,7 @@ export async function POST(req: Request, { params }: { params: { runId: string }
               if (!given && !when && !then) return null;
               return { given, when, then };
             })
-            .filter((tc: any): tc is { given: string; when: string; then: string } => tc !== null);
+            .filter((tc: any) => tc !== null);
         }
       }
       let trackerResult;
@@ -129,14 +138,40 @@ export async function POST(req: Request, { params }: { params: { runId: string }
       } else {
         await supabase.from('run_items').update({ status: 'rejected' }).eq('id', item.id);
       }
-      results.push({ itemId: item.id, success: trackerResult.success, error: trackerResult.error });
+      results.push({ 
+        itemId: item.id, 
+        success: trackerResult.success, 
+        error: trackerResult.error,
+        subtasksCreated: trackerResult.subtasksCreated || 0,
+        testCasesCreated: trackerResult.testCasesCreated || 0,
+        testCasesUpdated: trackerResult.testCasesUpdated || 0,
+      });
     } catch (e: any) {
       await supabase.from('run_items').update({ status: 'rejected' }).eq('id', item.id);
-      results.push({ itemId: item.id, success: false, error: e.message });
+      results.push({ 
+        itemId: item.id, 
+        success: false, 
+        error: e.message,
+        subtasksCreated: 0,
+        testCasesCreated: 0,
+        testCasesUpdated: 0,
+      });
     }
   }
 
-  return NextResponse.json({ results });
+  // Aggregate counts across all results
+  const totalSubtasksCreated = results.reduce((sum, r) => sum + (r.subtasksCreated || 0), 0);
+  const totalTestCasesCreated = results.reduce((sum, r) => sum + (r.testCasesCreated || 0), 0);
+  const totalTestCasesUpdated = results.reduce((sum, r) => sum + (r.testCasesUpdated || 0), 0);
+
+  return NextResponse.json({ 
+    results,
+    summary: {
+      subtasksCreated: totalSubtasksCreated,
+      testCasesCreated: totalTestCasesCreated,
+      testCasesUpdated: totalTestCasesUpdated,
+    },
+  });
 }
 
 type ApplyTrackerArgs = {
@@ -151,7 +186,15 @@ type ApplyTrackerArgs = {
   setStoryPoints: boolean;
 };
 
-async function applyAzureWorkItem(args: ApplyTrackerArgs): Promise<{ success: boolean; error?: string }> {
+type ApplyResult = {
+  success: boolean;
+  error?: string;
+  subtasksCreated?: number;
+  testCasesCreated?: number;
+  testCasesUpdated?: number;
+};
+
+async function applyAzureWorkItem(args: ApplyTrackerArgs): Promise<ApplyResult> {
   const { integration, creds, item, after, enhanced, selectedFields, createTasks, createTestCases, setStoryPoints } = args;
   const organization = (integration.metadata as any)?.organization || creds.organization;
   const project = (integration.metadata as any)?.project || creds.project;
@@ -306,17 +349,53 @@ async function applyAzureWorkItem(args: ApplyTrackerArgs): Promise<{ success: bo
     }
   }
 
-  return { success: true };
+  let testCasesCreated = 0;
+  if (createTestCases && Array.isArray(enhanced?.testCases) && enhanced.testCases.length) {
+    for (const tc of enhanced.testCases) {
+      try {
+        const title = `Test: Given ${tc.given}, When ${tc.when}, Then ${tc.then}`;
+        const tcDesc = `<p><strong>Given</strong> ${tc.given}</p><p><strong>When</strong> ${tc.when}</p><p><strong>Then</strong> ${tc.then}</p>`;
+        const childOps = [
+          { op: 'add', path: '/fields/System.Title', value: title },
+          { op: 'add', path: '/fields/System.Description', value: tcDesc },
+          {
+            op: 'add',
+            path: '/relations/-',
+            value: { rel: 'System.LinkTypes.Hierarchy-Reverse', url: `https://dev.azure.com/${encodeURIComponent(organization)}/_apis/wit/workItems/${encodeURIComponent(item.source_item_id)}` },
+          },
+        ];
+        const tcUrl = `https://dev.azure.com/${encodeURIComponent(organization)}/${encodeURIComponent(project)}/_apis/wit/workitems/$Test%20Case?api-version=7.1`;
+        const resp = await fetch(tcUrl, {
+          method: 'POST',
+          headers: { Authorization: authHeader, 'Content-Type': 'application/json-patch+json', Accept: 'application/json' },
+          body: JSON.stringify(childOps),
+        });
+        if (resp.ok) testCasesCreated++;
+      } catch {
+        // Non-blocking
+      }
+    }
+  }
+
+  return { success: true, testCasesCreated };
 }
 
-async function applyJiraWorkItem(args: ApplyTrackerArgs): Promise<{ success: boolean; error?: string }> {
+async function applyJiraWorkItem(args: ApplyTrackerArgs): Promise<ApplyResult> {
   const { integration, creds, item, after, enhanced, selectedFields, createTasks, createTestCases, setStoryPoints } = args;
   const baseUrl = (integration.metadata as any)?.baseUrl || creds.baseUrl;
   const projectKey = (integration.metadata as any)?.projectKey;
   const email = creds.email;
   const apiToken = creds.apiToken;
+  const zephyrApiToken = creds.zephyrApiToken; // Zephyr Scale API token
   const storyPointsFieldId = (integration.metadata as any)?.storyPointsFieldId;
   const testCaseIssueType = (integration.metadata as any)?.testCaseIssueType || 'Test';
+  
+  // New configuration options
+  const acceptanceCriteriaMapping = (integration.metadata as any)?.acceptanceCriteriaMapping || 'description';
+  const acceptanceCriteriaFieldId = (integration.metadata as any)?.acceptanceCriteriaFieldId;
+  const testCasesMapping = (integration.metadata as any)?.testCasesMapping || 'description';
+  const testCasesFieldId = (integration.metadata as any)?.testCasesFieldId;
+  
   if (!baseUrl || !projectKey || !email || !apiToken) {
     return { success: false, error: 'Incomplete Jira credentials' };
   }
@@ -347,17 +426,57 @@ async function applyJiraWorkItem(args: ApplyTrackerArgs): Promise<{ success: boo
   if (selectedFields.includes('title') && after.title) {
     fieldsUpdate.summary = after.title;
   }
-  const shouldUpdateDescription = selectedFields.includes('description') || selectedFields.includes('acceptance');
+  
+  // Handle Acceptance Criteria mapping
+  // Always update if mapping is configured, regardless of selectedFields
+  const acceptanceItems = collectAcceptanceItems(enhanced, after);
+  if (acceptanceItems.length > 0) {
+    if (acceptanceCriteriaMapping === 'custom_field' && acceptanceCriteriaFieldId) {
+      // Map to custom field - format as ADF bullet list (required for rich text fields)
+      fieldsUpdate[acceptanceCriteriaFieldId] = buildAdfBulletList(acceptanceItems);
+    }
+    // If mapping is 'description', it will be included in description below
+  }
+  
+  // Handle Test Cases mapping
+  // Always update if mapping is configured, regardless of selectedFields
+  const testCaseItems = collectTestCaseItems(enhanced);
+  if (testCaseItems.length > 0) {
+    if (testCasesMapping === 'custom_field' && testCasesFieldId) {
+      // Map to custom field - format as ADF bullet list (required for rich text fields)
+      fieldsUpdate[testCasesFieldId] = buildAdfBulletList(testCaseItems);
+    }
+    // If mapping is 'zephyr' or 'description', handled below
+  }
+  
+  // Build description (excluding AC/TC if they're mapped elsewhere)
+  // Update description if:
+  // - 'description' is selected, OR
+  // - 'acceptance' is selected AND AC mapping is 'description'
+  const shouldUpdateDescription = selectedFields.includes('description') || 
+    (selectedFields.includes('acceptance') && acceptanceCriteriaMapping === 'description');
   if (shouldUpdateDescription) {
     if (after._overrideDescription) {
-      const acceptanceHtml = renderAcceptanceHtml(collectAcceptanceItems(enhanced, after));
-      const testCaseHtml = renderTestCaseHtml(collectTestCaseItems(enhanced));
+      // For override, only include AC/TC if they're not mapped to custom fields or Zephyr
+      const acceptanceHtml = acceptanceCriteriaMapping === 'description' 
+        ? renderAcceptanceHtml(acceptanceItems)
+        : '';
+      const testCaseHtml = testCasesMapping === 'description'
+        ? renderTestCaseHtml(testCaseItems)
+        : '';
       const compiledHtml = [after._overrideDescription, acceptanceHtml, testCaseHtml].filter(Boolean).join('\n');
       fieldsUpdate.description = htmlToAdf(compiledHtml);
     } else {
-      fieldsUpdate.description = buildJiraDescriptionDoc(enhanced, after);
+      // Exclude AC if mapped to custom field, exclude TC if mapped to custom field or Zephyr
+      fieldsUpdate.description = buildJiraDescriptionDoc(
+        enhanced, 
+        after, 
+        acceptanceCriteriaMapping !== 'description', // exclude AC if not in description
+        testCasesMapping !== 'description' // exclude TC if not in description
+      );
     }
   }
+  
   if (setStoryPoints && typeof enhanced.storyPoints === 'number' && storyPointsFieldId) {
     fieldsUpdate[storyPointsFieldId] = enhanced.storyPoints;
   }
@@ -378,14 +497,67 @@ async function applyJiraWorkItem(args: ApplyTrackerArgs): Promise<{ success: boo
     return { success: false, error: text };
   }
 
+  let subtasksCreated = 0;
+  let testCasesCreated = 0;
+  let testCasesUpdated = 0;
+  
   if (createTasks && Array.isArray(enhanced?.tasks) && enhanced.tasks.length) {
-    await createJiraSubTasks(baseUrl, authHeader, projectKey, issueKey, enhanced.tasks, existingSubtaskSummaries, assigneeAccountId);
+    subtasksCreated = await createJiraSubTasks(baseUrl, authHeader, projectKey, issueKey, enhanced.tasks, existingSubtaskSummaries, assigneeAccountId);
   }
-  if (createTestCases && Array.isArray(enhanced?.testCases) && enhanced.testCases.length) {
-    await createJiraTestCases(baseUrl, authHeader, projectKey, issueKey, enhanced.testCases, testCaseIssueType);
+  
+  // Handle test cases creation based on mapping
+  if (Array.isArray(enhanced?.testCases) && enhanced.testCases.length) {
+    console.log(`Processing ${enhanced.testCases.length} test cases with mapping: ${testCasesMapping}`);
+    console.log('Test cases data:', JSON.stringify(enhanced.testCases, null, 2));
+    
+    if (testCasesMapping === 'zephyr') {
+      // Create Zephyr test cases using Zephyr Scale API v2
+      // Requires a separate Zephyr API token (not the same as Jira API token)
+      if (!zephyrApiToken) {
+        console.error('Zephyr test case mapping selected but no Zephyr API token provided');
+        // Don't fail the entire operation, just log the error
+      } else {
+        // Use Zephyr Bearer token auth instead of Jira Basic auth
+        const zephyrAuthHeader = `Bearer ${zephyrApiToken}`;
+        console.log('Calling createZephyrTestCases with:', {
+          projectKey,
+          issueKey,
+          testCaseCount: enhanced.testCases.length,
+          firstTestCase: enhanced.testCases[0]
+        });
+        const zephyrResult = await createZephyrTestCases(
+          baseUrl, 
+          zephyrAuthHeader,
+          authHeader, // Jira auth header for linking test cases to issues
+          projectKey, 
+          issueKey, 
+          enhanced.testCases,
+          testCaseIssueType // Optional - only for documentation/reference
+        );
+        testCasesCreated = zephyrResult.created;
+        testCasesUpdated = zephyrResult.updated;
+        if (zephyrResult.errors.length > 0) {
+          // Log errors but don't fail the entire operation
+          console.error('Zephyr test case creation had errors:', zephyrResult.errors);
+          // Optionally return a warning - for now we'll still return success
+          // as the main issue update succeeded
+        } else {
+          console.log(`Zephyr test cases: ${zephyrResult.created} created, ${zephyrResult.updated} updated`);
+        }
+      }
+    } else if (createTestCases && testCasesMapping === 'description') {
+      // Create as regular Jira test case issues (existing behavior)
+      testCasesCreated = await createJiraTestCases(baseUrl, authHeader, projectKey, issueKey, enhanced.testCases, testCaseIssueType);
+    }
+    // If testCasesMapping === 'custom_field', test cases are already mapped above
   }
 
-  return { success: true };
+  return { 
+    success: true, 
+    subtasksCreated,
+    testCasesCreated,
+    testCasesUpdated,
+  };
 }
 
 async function createJiraSubTasks(
@@ -396,7 +568,8 @@ async function createJiraSubTasks(
   tasks: string[],
   existingSummaries: Set<string>,
   assigneeAccountId: string | null,
-) {
+): Promise<number> {
+  let created = 0;
   for (const task of tasks) {
     const summary = typeof task === 'string' ? task.trim() : '';
     if (!summary) continue;
@@ -404,7 +577,7 @@ async function createJiraSubTasks(
     if (existingSummaries.has(normalized)) continue;
     existingSummaries.add(normalized);
     try {
-      await fetch(`${baseUrl}/rest/api/3/issue`, {
+      const resp = await fetch(`${baseUrl}/rest/api/3/issue`, {
         method: 'POST',
         headers: { Authorization: authHeader, Accept: 'application/json', 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -417,10 +590,12 @@ async function createJiraSubTasks(
           },
         }),
       });
+      if (resp.ok) created++;
     } catch {
       // Ignore individual failures
     }
   }
+  return created;
 }
 
 async function createJiraTestCases(
@@ -430,7 +605,8 @@ async function createJiraTestCases(
   parentKey: string,
   testCases: any[],
   issueType: string,
-) {
+): Promise<number> {
+  let created = 0;
   for (const tc of testCases) {
     try {
       const summary = `Test: Given ${tc.given}, When ${tc.when}, Then ${tc.then}`;
@@ -448,13 +624,14 @@ async function createJiraTestCases(
         }),
       });
       if (!resp.ok) continue;
-      const created = await resp.json();
+      const createdIssue = await resp.json();
+      created++;
       await fetch(`${baseUrl}/rest/api/3/issueLink`, {
         method: 'POST',
         headers: { Authorization: authHeader, Accept: 'application/json', 'Content-Type': 'application/json' },
         body: JSON.stringify({
           type: { name: 'Relates' },
-          inwardIssue: { key: created.key },
+          inwardIssue: { key: createdIssue.key },
           outwardIssue: { key: parentKey },
         }),
       });
@@ -462,9 +639,336 @@ async function createJiraTestCases(
       // Ignore linking failures
     }
   }
+  return created;
 }
 
-function buildJiraDescriptionDoc(enhanced: any, after: any) {
+async function createZephyrTestCases(
+  baseUrl: string,
+  zephyrAuthHeader: string,
+  jiraAuthHeader: string,
+  projectKey: string,
+  parentKey: string,
+  testCases: any[],
+  testCaseIssueType?: string, // Optional - for fallback only
+): Promise<{ errors: string[]; created: number; updated: number }> {
+  // Zephyr Scale Cloud API v2 Integration
+  // Zephyr Scale has its own separate API that requires a specific API token
+  // API docs: https://support.smartbear.com/zephyr-scale-cloud/api-docs/
+  
+  const errors: string[] = [];
+  let created = 0;
+  let updated = 0;
+  const zephyrBaseUrl = 'https://api.zephyrscale.smartbear.com/v2';
+  
+  // Helper function to search for existing test case by name
+  async function findExistingTestCase(testCaseName: string): Promise<string | null> {
+    try {
+      // Search for test cases in the project by name
+      // Zephyr API: GET /testcases?projectKey={projectKey}&name={name}
+      const searchUrl = `${zephyrBaseUrl}/testcases?projectKey=${encodeURIComponent(projectKey)}&name=${encodeURIComponent(testCaseName)}`;
+      const searchResp = await fetch(searchUrl, {
+        headers: {
+          'Authorization': zephyrAuthHeader,
+          'Accept': 'application/json'
+        }
+      });
+      
+      if (searchResp.ok) {
+        const searchResult: any = await searchResp.json();
+        // Check if we found an exact match
+        if (searchResult.values && searchResult.values.length > 0) {
+          const exactMatch = searchResult.values.find((tc: any) => 
+            tc.name?.trim() === testCaseName.trim()
+          );
+          if (exactMatch) {
+            return exactMatch.key;
+          }
+        }
+      }
+    } catch (e) {
+      // If search fails, we'll just create a new one
+      console.warn(`Failed to search for existing test case: ${e}`);
+    }
+    return null;
+  }
+  
+  // Helper function to link test case to Jira issue using Zephyr Scale API
+  async function linkTestCaseToIssue(testCaseKey: string, issueKey: string): Promise<boolean> {
+    try {
+      // Step 1: Get the Jira issue ID (numeric) from the issue key
+      // Zephyr API requires the internal numeric ID, not the issue key
+      const jiraIssueResp = await fetch(`${baseUrl}/rest/api/3/issue/${issueKey}`, {
+        headers: {
+          'Authorization': jiraAuthHeader,
+          'Accept': 'application/json'
+        }
+      });
+      
+      if (!jiraIssueResp.ok) {
+        console.warn(`Failed to get Jira issue details for ${issueKey}: ${jiraIssueResp.status}`);
+        return false;
+      }
+      
+      const jiraIssue: any = await jiraIssueResp.json();
+      const issueId = jiraIssue.id; // This is the numeric ID Zephyr needs
+      
+      if (!issueId) {
+        console.warn(`No issue ID found for ${issueKey}`);
+        return false;
+      }
+      
+      // Step 2: Link the test case to the Jira issue using Zephyr Scale API
+      // Endpoint: POST /v2/testcases/{testCaseKey}/links/issues
+      const linkResp = await fetch(`${zephyrBaseUrl}/testcases/${testCaseKey}/links/issues`, {
+        method: 'POST',
+        headers: {
+          'Authorization': zephyrAuthHeader,
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          issueId: parseInt(issueId, 10) // Ensure it's a number
+        }),
+      });
+      
+      if (linkResp.ok) {
+        console.log(`Successfully linked Zephyr test case ${testCaseKey} to Jira issue ${issueKey} (ID: ${issueId})`);
+        return true;
+      } else if (linkResp.status === 409 || linkResp.status === 400) {
+        // 409 Conflict or 400 might indicate link already exists
+        const errorText = await linkResp.text();
+        if (errorText.includes('already') || errorText.includes('exists') || errorText.includes('duplicate')) {
+          console.log(`Test case ${testCaseKey} is already linked to ${issueKey}`);
+          return true;
+        }
+        console.warn(`Failed to link test case ${testCaseKey} to ${issueKey}: ${errorText.substring(0, 200)}`);
+        return false;
+      } else {
+        const errorText = await linkResp.text();
+        console.warn(`Failed to link test case ${testCaseKey} to ${issueKey} (${linkResp.status}): ${errorText.substring(0, 200)}`);
+        return false;
+      }
+    } catch (error: any) {
+      console.error(`Failed to link test case to issue: ${error.message}`);
+      return false;
+    }
+  }
+  
+  for (const tc of testCases) {
+    let existingTestCaseKey: string | null = null;
+    let testCaseKey: string | null = null;
+    let wasUpdated = false;
+    
+    try {
+      // Support both new format (name + bddScript) and legacy format (given/when/then)
+      let testCaseName: string;
+      let testCasePayload: any;
+      
+      // Check if new format exists (name and bddScript are present and non-empty)
+      const hasNewFormat = tc.name !== undefined && tc.bddScript !== undefined && 
+                          typeof tc.name === 'string' && tc.name.trim().length > 0 &&
+                          typeof tc.bddScript === 'string' && tc.bddScript.trim().length > 0;
+      
+      if (hasNewFormat) {
+        // New Zephyr format with name and BDD script
+        testCaseName = tc.name;
+        
+        // Parse BDD script to extract Given/When/Then for Zephyr steps
+        const bddLines = tc.bddScript.split('\n').map((l: string) => l.trim()).filter(Boolean);
+        const steps: any[] = [];
+        
+        for (const line of bddLines) {
+          if (line.startsWith('Given')) {
+            steps.push({
+              description: line,
+              expectedResult: 'Precondition is met'
+            });
+          } else if (line.startsWith('When')) {
+            steps.push({
+              description: line,
+              expectedResult: 'Action is performed'
+            });
+          } else if (line.startsWith('Then')) {
+            steps.push({
+              description: line,
+              expectedResult: line.replace(/^Then\s+/, '')
+            });
+          } else if (line.startsWith('And')) {
+            // And statements continue the previous step type
+            steps.push({
+              description: line,
+              expectedResult: 'Condition met'
+            });
+          }
+        }
+        
+        testCasePayload = {
+          projectKey: projectKey,
+          name: testCaseName,
+          objective: `Verify: ${testCaseName}`,
+          testScript: {
+            type: 'STEP_BY_STEP',
+            steps: steps.length > 0 ? steps : [{
+              description: tc.bddScript,
+              expectedResult: 'Test passes'
+            }]
+          }
+        };
+      } else if (tc.given && tc.when && tc.then) {
+        // Legacy format for backward compatibility (Azure DevOps, etc.)
+        testCaseName = `Given ${tc.given}, When ${tc.when}, Then ${tc.then}`;
+        
+        testCasePayload = {
+          projectKey: projectKey,
+          name: testCaseName,
+          objective: `Verify: ${testCaseName}`,
+          testScript: {
+            type: 'STEP_BY_STEP',
+            steps: [
+              {
+                description: `Given ${tc.given}`,
+                expectedResult: 'Precondition is met'
+              },
+              {
+                description: `When ${tc.when}`,
+                expectedResult: 'Action is performed'
+              },
+              {
+                description: `Then ${tc.then}`,
+                expectedResult: tc.then
+              }
+            ]
+          }
+        };
+      } else {
+        // Invalid format - skip
+        console.warn('Invalid test case format, skipping:', JSON.stringify(tc, null, 2));
+        errors.push(`Skipped test case with invalid format. Expected either {name, bddScript} or {given, when, then}. Got: ${JSON.stringify(tc)}`);
+        continue;
+      }
+      
+      console.log(`Processing Zephyr test case: "${testCaseName}"`);
+      
+      // Check if test case already exists
+      existingTestCaseKey = await findExistingTestCase(testCaseName);
+      
+      if (existingTestCaseKey) {
+        // Update existing test case - first fetch it to get required fields
+        wasUpdated = true;
+        console.log(`Updating existing Zephyr test case ${existingTestCaseKey}`);
+        
+        // Fetch existing test case to get required fields (status, priority, project, id, key)
+        const getResp = await fetch(`${zephyrBaseUrl}/testcases/${existingTestCaseKey}`, {
+          headers: {
+            'Authorization': zephyrAuthHeader,
+            'Accept': 'application/json'
+          }
+        });
+        
+        if (!getResp.ok) {
+          const errorText = await getResp.text();
+          errors.push(
+            `Failed to fetch existing Zephyr test case "${testCaseName}" for update (${getResp.status}): ${errorText.substring(0, 300)}`
+          );
+          continue;
+        }
+        
+        const existingTestCase: any = await getResp.json();
+        
+        // Build update payload with required fields from existing test case
+        const updatePayload = {
+          ...testCasePayload,
+          id: existingTestCase.id,
+          key: existingTestCase.key,
+          status: existingTestCase.status || { name: 'Draft' }, // Preserve existing status or default
+          priority: existingTestCase.priority || { name: 'Medium' }, // Preserve existing priority or default
+          project: existingTestCase.project || { key: projectKey }, // Preserve existing project
+        };
+        
+        const updateResp = await fetch(`${zephyrBaseUrl}/testcases/${existingTestCaseKey}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': zephyrAuthHeader,
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(updatePayload),
+        });
+        
+        if (!updateResp.ok) {
+          const errorText = await updateResp.text();
+          errors.push(
+            `Failed to update Zephyr test case "${testCaseName}" (${updateResp.status}): ${errorText.substring(0, 300)}`
+          );
+          continue;
+        }
+        
+        // Handle response - PUT may return 200 with body or 204 with no body
+        let updatedTestCase: any = null;
+        const responseText = await updateResp.text();
+        if (responseText && responseText.trim()) {
+          try {
+            updatedTestCase = JSON.parse(responseText);
+          } catch (e) {
+            console.warn(`Could not parse update response for ${existingTestCaseKey}: ${e}`);
+          }
+        }
+        
+        testCaseKey = updatedTestCase?.key || existingTestCaseKey;
+        console.log(`Updated Zephyr test case ${testCaseKey}`);
+        updated++;
+      } else {
+        // Create new test case
+        wasUpdated = false;
+        const createResp = await fetch(`${zephyrBaseUrl}/testcases`, {
+          method: 'POST',
+          headers: {
+            'Authorization': zephyrAuthHeader,
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(testCasePayload),
+        });
+        
+        if (!createResp.ok) {
+          const errorText = await createResp.text();
+          errors.push(
+            `Failed to create Zephyr test case "${testCaseName}" (${createResp.status}): ${errorText.substring(0, 300)}`
+          );
+          continue;
+        }
+        
+        const createdTestCase: any = await createResp.json();
+        testCaseKey = createdTestCase.key;
+        console.log(`Created Zephyr test case ${testCaseKey} with test steps`);
+        created++;
+      }
+      
+      // Ensure the test case is linked to the parent story
+      if (parentKey && testCaseKey) {
+        const linked = await linkTestCaseToIssue(testCaseKey, parentKey);
+        if (!linked) {
+          errors.push(
+            `Warning: Test case ${testCaseKey} was ${wasUpdated ? 'updated' : 'created'} but could not be linked to ${parentKey}. ` +
+            `You may need to link it manually in Jira.`
+          );
+        }
+      }
+    } catch (error: any) {
+      errors.push(`Exception ${wasUpdated ? 'updating' : 'creating'} Zephyr test case: ${error.message || String(error)}`);
+      console.error(`Failed to ${wasUpdated ? 'update' : 'create'} Zephyr test case:`, error);
+    }
+  }
+  
+  return { errors, created, updated };
+}
+
+function buildJiraDescriptionDoc(
+  enhanced: any, 
+  after: any, 
+  excludeAcceptanceCriteria: boolean = false,
+  excludeTestCases: boolean = false
+) {
   const doc: any = { version: 1, type: 'doc', content: [] };
 
   const pushParagraph = (text: string) => {
@@ -502,16 +1006,25 @@ function buildJiraDescriptionDoc(enhanced: any, after: any) {
   if (enhanced.roleGoalReason) {
     pushParagraph(`Role-Goal-Reason: ${enhanced.roleGoalReason}`);
   }
-  const acceptanceItems = collectAcceptanceItems(enhanced, after);
-  if (acceptanceItems.length) {
-    pushHeading('Acceptance Criteria');
-    pushList(acceptanceItems);
+  
+  // Only include Acceptance Criteria if not excluded
+  if (!excludeAcceptanceCriteria) {
+    const acceptanceItems = collectAcceptanceItems(enhanced, after);
+    if (acceptanceItems.length) {
+      pushHeading('Acceptance Criteria');
+      pushList(acceptanceItems);
+    }
   }
-  const formattedTestCases = collectTestCaseItems(enhanced);
-  if (formattedTestCases.length) {
-    pushHeading('Test Cases');
-    pushList(formattedTestCases);
+  
+  // Only include Test Cases if not excluded
+  if (!excludeTestCases) {
+    const formattedTestCases = collectTestCaseItems(enhanced);
+    if (formattedTestCases.length) {
+      pushHeading('Test Cases');
+      pushList(formattedTestCases);
+    }
   }
+  
   const descriptionText =
     enhanced.descriptionText || stripHtml(after.descriptionHtml || '');
   if (descriptionText) {
@@ -560,6 +1073,37 @@ function buildJiraTestCaseDoc(tc: { given: string; when: string; then: string })
       {
         type: 'paragraph',
         content: [{ type: 'text', text: `Then ${tc.then}` }],
+      },
+    ],
+  };
+}
+
+function buildAdfBulletList(items: string[]): any {
+  // Build an ADF document with a bullet list
+  // This is required for Jira custom fields that are rich text fields
+  if (!items || items.length === 0) {
+    return {
+      version: 1,
+      type: 'doc',
+      content: [],
+    };
+  }
+  
+  return {
+    version: 1,
+    type: 'doc',
+    content: [
+      {
+        type: 'bulletList',
+        content: items.map((item) => ({
+          type: 'listItem',
+          content: [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: item }],
+            },
+          ],
+        })),
       },
     ],
   };
