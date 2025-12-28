@@ -692,7 +692,38 @@ async function createZephyrTestCases(
     return null;
   }
   
-  // Helper function to link test case to Jira issue using Zephyr Scale API
+  // Create test script for a test case using dedicated endpoint
+  // POST /testcases/{testCaseKey}/testscript
+  // Type must be lowercase: "plain" or "bdd"
+  async function createTestScript(testCaseKey: string, scriptType: 'plain' | 'bdd', scriptText: string): Promise<boolean> {
+    try {
+      const resp = await fetch(`${zephyrBaseUrl}/testcases/${testCaseKey}/testscript`, {
+        method: 'POST',
+        headers: {
+          'Authorization': zephyrAuthHeader,
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          type: scriptType,
+          text: scriptText
+        }),
+      });
+
+      if (!resp.ok) {
+        const errorText = await resp.text();
+        console.error(`Failed to create testScript for ${testCaseKey}: ${resp.status} - ${errorText.substring(0, 200)}`);
+        return false;
+      }
+      
+      console.log(`Created ${scriptType} testScript for ${testCaseKey}`);
+      return true;
+    } catch (e: any) {
+      console.error(`Exception creating testScript for ${testCaseKey}: ${e.message}`);
+      return false;
+    }
+  }
+  
   async function linkTestCaseToIssue(testCaseKey: string, issueKey: string): Promise<boolean> {
     try {
       // Step 1: Get the Jira issue ID (numeric) from the issue key
@@ -773,42 +804,20 @@ async function createZephyrTestCases(
         // New Zephyr format with name and BDD script
         testCaseName = tc.name;
         
-        // Use BDD format for Zephyr when we have BDD script
+        // Create test case first, then use separate endpoint for testScript
         testCasePayload = {
           projectKey: projectKey,
           name: testCaseName,
           objective: `Verify: ${testCaseName}`,
-          testScript: {
-            type: 'BDD',
-            text: tc.bddScript.trim()
-          }
         };
-        console.log(`Creating Zephyr test case with BDD format: "${testCaseName}"`);
       } else if (tc.given && tc.when && tc.then) {
-        // Legacy format for backward compatibility (Azure DevOps, etc.)
+        // Legacy format - create test case, then add steps via testscript endpoint
         testCaseName = `Given ${tc.given}, When ${tc.when}, Then ${tc.then}`;
         
         testCasePayload = {
           projectKey: projectKey,
           name: testCaseName,
           objective: `Verify: ${testCaseName}`,
-          testScript: {
-            type: 'STEP_BY_STEP',
-            steps: [
-              {
-                description: `Given ${tc.given}`,
-                expectedResult: 'Precondition is met'
-              },
-              {
-                description: `When ${tc.when}`,
-                expectedResult: 'Action is performed'
-              },
-              {
-                description: `Then ${tc.then}`,
-                expectedResult: tc.then
-              }
-            ]
-          }
         };
       } else {
         // Invalid format - skip
@@ -850,9 +859,9 @@ async function createZephyrTestCases(
           ...testCasePayload,
           id: existingTestCase.id,
           key: existingTestCase.key,
-          status: existingTestCase.status || { name: 'Draft' }, // Preserve existing status or default
-          priority: existingTestCase.priority || { name: 'Medium' }, // Preserve existing priority or default
-          project: existingTestCase.project || { key: projectKey }, // Preserve existing project
+          status: existingTestCase.status || { name: 'Draft' },
+          priority: existingTestCase.priority || { name: 'Medium' },
+          project: existingTestCase.project || { key: projectKey },
         };
         
         const updateResp = await fetch(`${zephyrBaseUrl}/testcases/${existingTestCaseKey}`, {
@@ -870,6 +879,7 @@ async function createZephyrTestCases(
           errors.push(
             `Failed to update Zephyr test case "${testCaseName}" (${updateResp.status}): ${errorText.substring(0, 300)}`
           );
+          console.error(`Zephyr API update error response:`, errorText);
           continue;
         }
         
@@ -880,12 +890,29 @@ async function createZephyrTestCases(
           try {
             updatedTestCase = JSON.parse(responseText);
           } catch (e) {
-            console.warn(`Could not parse update response for ${existingTestCaseKey}: ${e}`);
+            // Ignore parse errors for empty responses
           }
         }
         
         testCaseKey = updatedTestCase?.key || existingTestCaseKey;
         console.log(`Updated Zephyr test case ${testCaseKey}`);
+        
+        // Create/update test script using dedicated endpoint
+        if (testCaseKey) {
+          if (hasNewFormat && tc.bddScript) {
+            const scriptCreated = await createTestScript(testCaseKey, 'bdd', tc.bddScript.trim());
+            if (!scriptCreated) {
+              errors.push(`Warning: Test case ${testCaseKey} was updated but BDD script could not be set.`);
+            }
+          } else if (tc.given && tc.when && tc.then) {
+            // For legacy format, use plain text with formatted steps
+            const plainScript = `Given ${tc.given}\nWhen ${tc.when}\nThen ${tc.then}`;
+            const scriptCreated = await createTestScript(testCaseKey, 'plain', plainScript);
+            if (!scriptCreated) {
+              errors.push(`Warning: Test case ${testCaseKey} was updated but test script could not be set.`);
+            }
+          }
+        }
         updated++;
       } else {
         // Create new test case
@@ -905,12 +932,31 @@ async function createZephyrTestCases(
           errors.push(
             `Failed to create Zephyr test case "${testCaseName}" (${createResp.status}): ${errorText.substring(0, 300)}`
           );
+          console.error(`Zephyr API error response:`, errorText);
           continue;
         }
         
         const createdTestCase: any = await createResp.json();
         testCaseKey = createdTestCase.key;
-        console.log(`Created Zephyr test case ${testCaseKey} with test steps`);
+        console.log(`Created Zephyr test case ${testCaseKey}`);
+        
+        // Create test script using dedicated endpoint
+        if (testCaseKey) {
+          if (hasNewFormat && tc.bddScript) {
+            const scriptCreated = await createTestScript(testCaseKey, 'bdd', tc.bddScript.trim());
+            if (!scriptCreated) {
+              errors.push(`Warning: Test case ${testCaseKey} was created but BDD script could not be set.`);
+            }
+          } else if (tc.given && tc.when && tc.then) {
+            // For legacy format, use plain text with formatted steps
+            const plainScript = `Given ${tc.given}\nWhen ${tc.when}\nThen ${tc.then}`;
+            const scriptCreated = await createTestScript(testCaseKey, 'plain', plainScript);
+            if (!scriptCreated) {
+              errors.push(`Warning: Test case ${testCaseKey} was created but test script could not be set.`);
+            }
+          }
+        }
+        
         created++;
       }
       
